@@ -46,8 +46,11 @@ def main(n: int = 12) -> dict:
     for i, (mid, q) in enumerate(questions):
         prompt = (f"You are a forecaster. QUESTION: {q}\nReason briefly, then output "
                   f"exactly one line 'FINAL: <probability between 0 and 1>'.")
+        import time
         text1, r1 = b.complete(prompt, seed=555, purpose="replay_a")
+        time.sleep(2.0)                       # pinned-provider politeness
         text2, r2 = b.complete(prompt, seed=555, purpose="replay_b")
+        time.sleep(2.0)
         v1, v2 = parse_probability(text1), parse_probability(text2)
         rows.append({"i": i, "market_id": mid,
                      "sha_equal": r1.output_sha == r2.output_sha,

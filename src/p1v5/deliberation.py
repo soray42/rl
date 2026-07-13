@@ -112,25 +112,43 @@ class OpenRouterBackend:
     name = "openrouter"
     URL = "https://openrouter.ai/api/v1/chat/completions"
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, provider_pin: str = "DeepInfra"):
+        """provider_pin (E10, replay measurement 2026-07-14): unpinned OpenRouter
+        routing scattered 24 calls across 13 providers with vote-agreement 0.25
+        and 17% parse failures. Pinning one provider is a frozen design value;
+        None disables the pin (measurement only, never the experiment)."""
         self.model = model
+        self.provider_pin = provider_pin
         self.key = os.environ.get("OPENROUTER_API_KEY")
         if not self.key:
             raise RuntimeError("OPENROUTER_API_KEY not set; use StubBackend for dry runs")
 
     def complete(self, prompt: str, seed: int, purpose: str, model: str = None) -> tuple:
         model = model or self.model
-        body = json.dumps({"model": model, "temperature": 0, "seed": seed,
-                           "max_tokens": 400,
-                           "messages": [{"role": "user", "content": prompt}]}).encode()
+        payload = {"model": model, "temperature": 0, "seed": seed,
+                   "max_tokens": 400,
+                   "messages": [{"role": "user", "content": prompt}]}
+        if self.provider_pin:
+            payload["provider"] = {"order": [self.provider_pin], "allow_fallbacks": False}
+        body = json.dumps(payload).encode()
         req = urllib.request.Request(
             self.URL, data=body, method="POST",
             headers={"Authorization": f"Bearer {self.key}",
                      "Content-Type": "application/json",
                      "HTTP-Referer": "https://p1v5.local", "X-Title": "p1v5-micropilot"})
         t0 = time.monotonic()
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            out = json.loads(resp.read())
+        out = None
+        for attempt, backoff in enumerate((0, 5, 15, 30)):
+            if backoff:
+                time.sleep(backoff)
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    out = json.loads(resp.read())
+                break
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < 3:   # pinned provider rate limit: back off
+                    continue
+                raise
         # providers occasionally return content=None (empty/refusal/reasoning-only);
         # that is a typed empty output, NOT a crash — parse_probability(None-safe "")
         # will yield no vote and the scoring fallback handles it honestly

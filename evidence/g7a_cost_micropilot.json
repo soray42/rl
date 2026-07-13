@@ -1,15 +1,14 @@
 {
-  "produced_by": "tools/make_g8_evidence.py over docs/g8_rights_matrix.md (sha eb09bd28f05cdaf1)",
+  "produced_by": "tools/make_g7a_evidence.py over build/micro_pilot_live.json (sha 07904fafd761e1e3); model=deepseek/deepseek-v4-flash pinned-provider run 2026-07-13T23:15:47+00:00",
   "produced_at_utc": "2026-07-13T23:26:08+00:00",
   "inputs": {
     "manifest_sha256": "d8c975c424eada77b52a1c19d224a3d364ee7c4cda30af55c1e1cd209e59c932",
     "input_lock_sha256": "9ab16a3b99a024e519dea6cc855d0312541cd18bd1f0b7f91d6ed3d92a79e5be"
   },
   "metrics": {
-    "n_fields_analyzed": 14,
-    "n_allow": 8,
-    "n_restrict": 6,
-    "terms_sha256": "27828b629e92eef373a9d2d91a29c349053f8a5b4cd102995a1396d3de04efd0"
+    "cost_usd_estimate": 0.0177,
+    "cost_error_pct": 15.71,
+    "n_dry_run_events": 6
   },
   "verdict": "PASS"
 }
