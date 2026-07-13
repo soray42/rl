@@ -1,0 +1,283 @@
+arms:
+- credit_source: none
+  id: no_update
+  implementation_status: toy_scaffold
+  role: control
+- credit_source: team_surplus_v_N_minus_v_empty
+  id: shared_surplus
+  implementation_status: toy_scaffold
+  role: baseline_convention
+- credit_source: per_agent_vote_level_marginal_difference_LOO
+  id: diff_agent_credit
+  implementation_status: toy_scaffold
+  role: coprimary_C1_arm_a
+- credit_source: fixed_history_single_message_replacement_continuation_rollout_LOO_baseline
+  id: c3_action
+  implementation_status: toy_scaffold
+  role: coprimary_C2_arm_a
+- credit_source: identical_call_pattern_to_c3_action_with_attribution_deranged_within_settlement_batch
+  id: c3_compute_matched_sham
+  implementation_status: toy_scaffold
+  role: coprimary_C2_arm_b_and_placebo
+  sham_derangement: seeded Sattolo cycle (guaranteed no fixed point) for n>=2
+  sham_singleton_fallback: 'attribution neutralized (sign 0, not admitted); scientific
+    null: no attribution information; occurrence ledgered'
+budget:
+  llm_usd:
+    kind: hard_cap
+    value: 250
+  on_core_overrun: NO_CONFIRMATORY; arms are never silently dropped
+  overflow_eur:
+    kind: hard_cap
+    value: 200
+clocks:
+  feedback_eligible: finalized_at <= observed_at <= applied_at <= prompt_state_cutoff
+    < forecast_at
+  fields:
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  - x
+  fixture_suite: tests/fixtures/clock_fixtures.json
+  forecast_admissible: enrolled AND trading open AND input_at < forecast_at < prediction_cutoff
+    AND no known outcome_public_time <= forecast_at AND question not quarantined
+  ledger_model: immutable scoped event log; state = pure fold in canonical (t, source,
+    msg_id) order; illegal transitions quarantine the question fail-closed; invalid
+    events dead-lettered without consuming idempotency keys
+  negrisk_invariant: at most one terminal yes per group; violation quarantines the
+    whole group
+estimand:
+  assignment:
+    allocation: equal_probability_across_5_arms
+    blocking: randomization_block_per_enrollment_wave
+    noncompliance: 'ITT: trajectories analyzed as randomized regardless of runtime
+      failures; failure receipts ledgered'
+    seed_schedule: per_trajectory_seed = sha256(prereg_root_hash + trajectory_index);
+      recorded in assignment ledger before first forecast
+    trajectories_per_arm_K:
+      freeze_procedure: gate G6 simulation output; frozen at preregistration
+      status: PENDING
+      value: null
+    unit: trajectory
+  conditioning: realized_chronological_event_stream
+  contrasts:
+    alpha: 0.05
+    coprimary:
+    - arm_a: ghost
+      arm_b: ghost
+      id: C1
+    - arm_a: ghost
+      arm_b: ghost
+      id: C1
+    coprimary_success_rule: each contrast is independently reportable; paper headline
+      requires at least one four-way branch other than inconclusive under Holm-adjusted
+      intervals
+    estimator: trajectory-level mean difference; variance by cluster bootstrap over
+      event_family x trajectory (crossed); adjusted CIs per Holm
+    multiplicity: holm_over_2_coprimary
+    orientation: tau = mean_brier(arm_a) - mean_brier(arm_b); negative tau favors
+      arm_a
+    sidedness: two_sided
+    smallest_worthwhile_effect:
+      freeze_procedure: decision-meaning document written and hashed BEFORE gate G6
+        runs; defined on per-market mean Brier scale; independent of pilot effect
+        estimates
+      status: PENDING
+      value: null
+  decision_rule:
+    branches:
+    - inconclusive
+    - inconclusive
+    - inconclusive
+    - inconclusive
+    equivalence_requires: Holm-adjusted CI fully inside [-delta, +delta]; p>0.05 never
+      treated as equivalence
+    harm_mechanism_note: harm identifies frozen-policy relative harm only; credit-contamination
+      interpretation requires common updater + compute-matched sham + placebo suite
+      + mediator diagnostics jointly
+    kind: four_way_interval
+  endpoint:
+    brier_convention: (q - y)^2 with y in {0,1}; lower is better
+    coverage_rule: forced_forecast_all_enrolled_markets
+    cumulative_mapping: cumulative = mean * n_eligible; delta is defined on the mean
+      scale so horizon affects precision, not MCID units
+    failure_loss: 1.0
+    failure_note: any invalid/missing forecast scores worst-case loss 1.0 in the primary
+      analysis (strategic missingness can never help); sensitivity analysis at 0.25
+      preregistered; per-arm failure rates ledgered and monitored
+    fifty_fifty_handling: excluded_from_endpoint_with_preregistered_attrition_sensitivity
+    horizon_T:
+      freeze_procedure: output of gate G6 simulation; frozen at preregistration
+      status: PENDING
+      value: null
+    label_follow_up_days:
+      freeze_procedure: frozen with horizon_T at preregistration
+      status: PENDING
+      value: null
+    metric: per_eligible_market_mean_brier
+    too_early_handling: not_terminal; question stays open under next proposal round
+    unresolved_handling: right_censored_at_label_follow_up_cutoff
+  id: H1
+  population_frame:
+    dependence_handling: cluster_by_event_family
+    inclusion_rulebook:
+      freeze_procedure: enrollment rulebook doc + hash frozen before first confirmatory
+        acquisition; checked by gate G5a
+      status: PENDING
+      value: null
+    source: polymarket_public_api
+    unit: binary_market_question
+    weighting: equal_weight_per_eligible_market
+  resource_semantics: resource_inclusive
+  superpopulation_claim: secondary_sensitivity_only
+  type: randomized_policy_ITT
+gates:
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+- depends_on: []
+  id: G9a
+  predicate: check_g9a_search_protocol
+manifest_version: 5.2.0
+memory_policy_common:
+  admission_top_k: 8
+  capacity_items: 64
+  eviction: lowest_abs_quantized_ratio_then_oldest_feedback_clock
+  magnitude_semantics: scale-free quantized credit ratio is stored per item and drives
+    retrieval weighting and eviction, so fine-grained credit VALUES (not only rank/sign)
+    shape memory behavior
+  retrieval_order: abs_quantized_ratio_then_recency
+  retrieval_top_m: 8
+  rng: per_trajectory_seed_recorded_in_ledger
+  tie_break: lexicographic_item_sha256
+  write_source: feedback_eligible_settlements_only
+meta:
+  banned_wording:
+  - first
+  - zero occupancy
+  - paradigm
+  - emergence
+  - reverse learning
+  - true credit
+  - outcome-before-forecast
+  - three outcomes all publishable
+  date: '2026-07-13'
+  identity_en: A preregistered prospective comparative-effectiveness study of complete
+    multi-agent credit-conditioned external-memory policies on real prediction-market
+    events, using pre-outcome forecast commitments, delayed-resolution update clocks,
+    and a recomputable intervention ledger.
+  implementation_status_honest: runnable scaffold under repair contract E0-E12; NOT
+    a freezable experiment system
+  novelty_scope: to our knowledge, under the registered search protocol
+  supersedes: p1_v5 5.1.0 (round-8 engineering BLOCK, 21/21 witness reproduced)
+offline_analyses:
+- id: shapley_game
+  reason_offline: trajectory budget reserved for H1 power
+- id: settlement_batch_label_permutation
+  role: placebo_suite_component_offline_diagnostic
+placebo_suite:
+  choice: option_2
+  components:
+  - x
+  - x
+  - x
+  justification: covers compute/content confound (sham), estimator validity vs known
+    truth (planted oracle), credit-specificity without lookahead (in-batch permutation)
+replaced_arms:
+- id: shuffled_placebo
+  reason: A07 lookahead + A20 compute confound resolved jointly (D5/D7 option 2)
+  replaced_by: c3_compute_matched_sham
+rights:
+  allow_list:
+  - own_forecasts
+  - own_transcripts_subject_to_model_terms
+  - own_credit_values
+  - own_scores
+  - market_ids
+  - timestamps
+  - refetch_scripts
+  clean_path: written permission letter to Polymarket for price-data artifact
+  default_release_mode: RESTRICT
+  restrict_list:
+  - market_prices_any_form_raw_derived_aggregated_anonymized
+  - evidence_bodies
+  terms_archive: ../phase_b2/05_rights/polymarket_terms_2026-07-06/polymarket_terms_raw.txt
+  terms_sha256: 27828b629e92eef373a9d2d91a29c349053f8a5b4cd102995a1396d3de04efd0
+schema_ref: schema/manifest.schema.json
+score_invariance:
+  admissible_domain:
+    a_abs_max: 1000000.0
+    b_max: 1000000.0
+    b_min: 1.0e-06
+  contract: memory pipeline consumes raw (q, y) records and computes credits under
+    the internal canonical Brier convention; published-score affine conventions are
+    a reporting layer with no code path into memory, so convention-independence holds
+    by construction
+  quantization: credits ranked on ratio to batch max-abs credit rounded to 9 significant
+    digits; quantized zero gets sign 0 and is not admitted; quantized ratio is the
+    scale-free relative magnitude
+  reporting_note: admissible_domain applies to published-score reporting transforms
+    only, never to memory
+theory_h3:
+  artifact:
+    freeze_procedure: theorem + assumptions + proof + sign/rank/ties/clipping cases
+      in docs/theory_h3.md with discovered test tests/test_theory_h3.py; content receipt
+      (test exit 0) required by FREEZE
+    status: PENDING
+    value: null
+  claim: analytic sign/rank regions for Brier counterfactual credit under latent event
+    probability
+  empirical_clause: REMOVED (R15 option 2)

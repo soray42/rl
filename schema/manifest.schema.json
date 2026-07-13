@@ -1,0 +1,735 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "p1v5.manifest.schema.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "schema_ref",
+    "meta",
+    "estimand",
+    "arms",
+    "replaced_arms",
+    "offline_analyses",
+    "memory_policy_common",
+    "score_invariance",
+    "clocks",
+    "placebo_suite",
+    "theory_h3",
+    "rights",
+    "gates",
+    "budget"
+  ],
+  "definitions": {
+    "pending_or_frozen": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "status",
+        "freeze_procedure"
+      ],
+      "properties": {
+        "value": {},
+        "status": {
+          "enum": [
+            "PENDING",
+            "FROZEN"
+          ]
+        },
+        "freeze_procedure": {
+          "type": "string",
+          "minLength": 20
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "PENDING"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "FROZEN"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "not": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "properties": {
+    "manifest_version": {
+      "type": "string",
+      "pattern": "^5\\.[0-9]+\\.[0-9]+$"
+    },
+    "schema_ref": {
+      "const": "schema/manifest.schema.json"
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "date",
+        "supersedes",
+        "identity_en",
+        "implementation_status_honest",
+        "novelty_scope",
+        "banned_wording"
+      ],
+      "properties": {
+        "date": {
+          "type": "string",
+          "pattern": "^20[0-9]{2}-[0-9]{2}-[0-9]{2}$"
+        },
+        "supersedes": {
+          "type": "string"
+        },
+        "identity_en": {
+          "type": "string",
+          "minLength": 100
+        },
+        "implementation_status_honest": {
+          "type": "string",
+          "minLength": 20
+        },
+        "novelty_scope": {
+          "const": "to our knowledge, under the registered search protocol"
+        },
+        "banned_wording": {
+          "type": "array",
+          "minItems": 5,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "estimand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "type",
+        "conditioning",
+        "resource_semantics",
+        "superpopulation_claim",
+        "assignment",
+        "population_frame",
+        "endpoint",
+        "contrasts",
+        "decision_rule"
+      ],
+      "properties": {
+        "id": {
+          "const": "H1"
+        },
+        "type": {
+          "const": "randomized_policy_ITT"
+        },
+        "conditioning": {
+          "const": "realized_chronological_event_stream"
+        },
+        "resource_semantics": {
+          "const": "resource_inclusive"
+        },
+        "superpopulation_claim": {
+          "const": "secondary_sensitivity_only"
+        },
+        "assignment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "unit",
+            "allocation",
+            "blocking",
+            "trajectories_per_arm_K",
+            "seed_schedule",
+            "noncompliance"
+          ],
+          "properties": {
+            "unit": {
+              "const": "trajectory"
+            },
+            "allocation": {
+              "type": "string"
+            },
+            "blocking": {
+              "type": "string"
+            },
+            "trajectories_per_arm_K": {
+              "$ref": "#/definitions/pending_or_frozen"
+            },
+            "seed_schedule": {
+              "type": "string",
+              "minLength": 30
+            },
+            "noncompliance": {
+              "type": "string",
+              "minLength": 20
+            }
+          }
+        },
+        "population_frame": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "unit",
+            "weighting",
+            "dependence_handling",
+            "inclusion_rulebook"
+          ],
+          "properties": {
+            "source": {
+              "const": "polymarket_public_api"
+            },
+            "unit": {
+              "const": "binary_market_question"
+            },
+            "weighting": {
+              "const": "equal_weight_per_eligible_market"
+            },
+            "dependence_handling": {
+              "const": "cluster_by_event_family"
+            },
+            "inclusion_rulebook": {
+              "$ref": "#/definitions/pending_or_frozen"
+            }
+          }
+        },
+        "endpoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "metric",
+            "cumulative_mapping",
+            "brier_convention",
+            "failure_loss",
+            "failure_note",
+            "fifty_fifty_handling",
+            "too_early_handling",
+            "unresolved_handling",
+            "coverage_rule",
+            "horizon_T",
+            "label_follow_up_days"
+          ],
+          "properties": {
+            "metric": {
+              "const": "per_eligible_market_mean_brier"
+            },
+            "failure_loss": {
+              "const": 1.0
+            },
+            "fifty_fifty_handling": {
+              "const": "excluded_from_endpoint_with_preregistered_attrition_sensitivity"
+            },
+            "coverage_rule": {
+              "const": "forced_forecast_all_enrolled_markets"
+            },
+            "horizon_T": {
+              "$ref": "#/definitions/pending_or_frozen"
+            },
+            "label_follow_up_days": {
+              "$ref": "#/definitions/pending_or_frozen"
+            },
+            "cumulative_mapping": {
+              "type": "string",
+              "minLength": 1
+            },
+            "brier_convention": {
+              "type": "string",
+              "minLength": 1
+            },
+            "failure_note": {
+              "type": "string",
+              "minLength": 1
+            },
+            "too_early_handling": {
+              "type": "string",
+              "minLength": 1
+            },
+            "unresolved_handling": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "contrasts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "alpha",
+            "sidedness",
+            "multiplicity",
+            "coprimary_success_rule",
+            "orientation",
+            "estimator",
+            "smallest_worthwhile_effect",
+            "coprimary"
+          ],
+          "properties": {
+            "alpha": {
+              "const": 0.05
+            },
+            "sidedness": {
+              "const": "two_sided"
+            },
+            "multiplicity": {
+              "const": "holm_over_2_coprimary"
+            },
+            "orientation": {
+              "type": "string",
+              "minLength": 30
+            },
+            "estimator": {
+              "type": "string",
+              "minLength": 30
+            },
+            "smallest_worthwhile_effect": {
+              "$ref": "#/definitions/pending_or_frozen"
+            },
+            "coprimary": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "arm_a",
+                  "arm_b"
+                ],
+                "properties": {
+                  "id": {
+                    "enum": [
+                      "C1",
+                      "C2"
+                    ]
+                  },
+                  "arm_a": {
+                    "type": "string"
+                  },
+                  "arm_b": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "coprimary_success_rule": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "decision_rule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "branches",
+            "equivalence_requires",
+            "harm_mechanism_note"
+          ],
+          "properties": {
+            "kind": {
+              "const": "four_way_interval"
+            },
+            "branches": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4
+            },
+            "equivalence_requires": {
+              "type": "string",
+              "minLength": 1
+            },
+            "harm_mechanism_note": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "arms": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "credit_source",
+          "implementation_status"
+        ],
+        "properties": {
+          "id": {
+            "enum": [
+              "no_update",
+              "shared_surplus",
+              "diff_agent_credit",
+              "c3_action",
+              "c3_compute_matched_sham"
+            ]
+          },
+          "implementation_status": {
+            "enum": [
+              "toy_scaffold",
+              "implemented",
+              "verified"
+            ]
+          }
+        }
+      }
+    },
+    "replaced_arms": {
+      "type": "array"
+    },
+    "offline_analyses": {
+      "type": "array"
+    },
+    "memory_policy_common": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capacity_items",
+        "admission_top_k",
+        "retrieval_top_m",
+        "retrieval_order",
+        "tie_break",
+        "eviction",
+        "write_source",
+        "rng",
+        "magnitude_semantics"
+      ],
+      "properties": {
+        "capacity_items": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "admission_top_k": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retrieval_top_m": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retrieval_order": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tie_break": {
+          "type": "string",
+          "minLength": 1
+        },
+        "eviction": {
+          "type": "string",
+          "minLength": 1
+        },
+        "write_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rng": {
+          "type": "string",
+          "minLength": 1
+        },
+        "magnitude_semantics": {
+          "type": "string",
+          "minLength": 20
+        }
+      }
+    },
+    "score_invariance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "admissible_domain",
+        "quantization"
+      ],
+      "properties": {
+        "admissible_domain": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "a_abs_max",
+            "b_min",
+            "b_max"
+          ],
+          "properties": {
+            "a_abs_max": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "b_min": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "b_max": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
+        "contract": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantization": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reporting_note": {
+          "type": "string",
+          "minLength": 20
+        }
+      }
+    },
+    "clocks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fields",
+        "ledger_model",
+        "forecast_admissible",
+        "feedback_eligible",
+        "negrisk_invariant",
+        "fixture_suite"
+      ],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "minItems": 15
+        },
+        "ledger_model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "forecast_admissible": {
+          "type": "string",
+          "minLength": 1
+        },
+        "feedback_eligible": {
+          "type": "string",
+          "minLength": 1
+        },
+        "negrisk_invariant": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fixture_suite": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "placebo_suite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "choice",
+        "components",
+        "justification"
+      ],
+      "properties": {
+        "choice": {
+          "const": "option_2"
+        },
+        "components": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "justification": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "theory_h3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim",
+        "empirical_clause",
+        "artifact"
+      ],
+      "properties": {
+        "empirical_clause": {
+          "const": "REMOVED (R15 option 2)"
+        },
+        "artifact": {
+          "$ref": "#/definitions/pending_or_frozen"
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "terms_archive",
+        "terms_sha256",
+        "default_release_mode",
+        "allow_list",
+        "restrict_list",
+        "clean_path"
+      ],
+      "properties": {
+        "terms_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "default_release_mode": {
+          "const": "RESTRICT"
+        },
+        "terms_archive": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allow_list": {
+          "type": "array",
+          "minItems": 3
+        },
+        "clean_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "restrict_list": {
+          "type": "array",
+          "minItems": 2
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "depends_on",
+          "predicate"
+        ],
+        "properties": {
+          "id": {
+            "enum": [
+              "G9a",
+              "G0",
+              "G1",
+              "G2",
+              "G3",
+              "G4",
+              "G5a",
+              "G5b",
+              "G6",
+              "G7a",
+              "G7b",
+              "G8",
+              "G9b",
+              "G10",
+              "LOCK",
+              "FREEZE"
+            ]
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "predicate": {
+            "type": "string",
+            "pattern": "^(check_[a-z0-9_]+|evidence_gate)$"
+          },
+          "evidence_path": {
+            "type": "string",
+            "pattern": "^evidence/"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "llm_usd",
+        "overflow_eur",
+        "on_core_overrun"
+      ],
+      "properties": {
+        "llm_usd": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "value",
+            "kind"
+          ],
+          "properties": {
+            "value": {
+              "type": "number"
+            },
+            "kind": {
+              "const": "hard_cap"
+            }
+          }
+        },
+        "overflow_eur": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "value",
+            "kind"
+          ],
+          "properties": {
+            "value": {
+              "type": "number"
+            },
+            "kind": {
+              "const": "hard_cap"
+            }
+          }
+        },
+        "on_core_overrun": {
+          "type": "string",
+          "minLength": 10
+        }
+      }
+    }
+  }
+}

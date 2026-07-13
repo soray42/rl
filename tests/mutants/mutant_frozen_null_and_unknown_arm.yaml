@@ -1,0 +1,25 @@
+manifest_version: "5.1.0"
+schema_ref: "schema/manifest.schema.json"
+meta: {date: "2026-07-13", supersedes: "x", identity_en: "A preregistered prospective comparative-effectiveness study of complete multi-agent credit-conditioned external-memory policies on real prediction-market events with long identity text.", implementation_status_honest: "runnable scaffold under repair contract", novelty_scope: "to our knowledge, under the registered search protocol", banned_wording: [a, b, c, d, e]}
+estimand:
+  id: "H1"
+  type: "randomized_policy_ITT"
+  conditioning: "realized_chronological_event_stream"
+  resource_semantics: "resource_inclusive"
+  superpopulation_claim: "secondary_sensitivity_only"
+  assignment: {unit: "trajectory", allocation: "equal", blocking: "wave", trajectories_per_arm_K: {value: null, status: "FROZEN", freeze_procedure: "frozen with a null value which must be rejected"}, seed_schedule: "per_trajectory_seed = sha256(root + index) recorded", noncompliance: "ITT regardless of failures"}
+  population_frame: {source: "polymarket_public_api", unit: "binary_market_question", weighting: "equal_weight_per_eligible_market", dependence_handling: "cluster_by_event_family", inclusion_rulebook: {value: null, status: "PENDING", freeze_procedure: "rulebook frozen before first acquisition"}}
+  endpoint: {metric: "per_eligible_market_mean_brier", cumulative_mapping: "x", brier_convention: "x", failure_loss: 1.0, failure_note: "x", fifty_fifty_handling: "excluded_from_endpoint_with_preregistered_attrition_sensitivity", too_early_handling: "x", unresolved_handling: "x", coverage_rule: "forced_forecast_all_enrolled_markets", horizon_T: {value: null, status: "PENDING", freeze_procedure: "G6 simulation output frozen at prereg"}, label_follow_up_days: {value: null, status: "PENDING", freeze_procedure: "frozen with horizon at prereg"}}
+  contrasts: {alpha: 0.05, sidedness: "two_sided", multiplicity: "holm_over_2_coprimary", coprimary_success_rule: "x", orientation: "tau = mean_brier(arm_a) - mean_brier(arm_b) negative favors a", estimator: "trajectory-level mean difference with cluster bootstrap", smallest_worthwhile_effect: {value: null, status: "PENDING", freeze_procedure: "decision document before G6 independent of pilot"}, coprimary: [{id: "C1", arm_a: "diff_agent_credit", arm_b: "shared_surplus"}, {id: "C2", arm_a: "c3_action", arm_b: "not_in_code"}]}
+  decision_rule: {kind: "four_way_interval", branches: [a, b, c, d], equivalence_requires: "x", harm_mechanism_note: "x"}
+arms: [{id: "no_update", role: r, credit_source: c, implementation_status: "toy_scaffold"}, {id: "shared_surplus", role: r, credit_source: c, implementation_status: "toy_scaffold"}, {id: "diff_agent_credit", role: r, credit_source: c, implementation_status: "toy_scaffold"}, {id: "c3_action", role: r, credit_source: c, implementation_status: "toy_scaffold"}, {id: "unknown_arm_xyz", role: r, credit_source: c, implementation_status: "toy_scaffold"}]
+replaced_arms: []
+offline_analyses: []
+memory_policy_common: {capacity_items: 64, admission_top_k: 8, retrieval_top_m: 8, retrieval_order: x, tie_break: x, eviction: x, write_source: x, rng: x}
+score_invariance: {contract: x, admissible_domain: {a_abs_max: 1000000.0, b_min: 0.000001, b_max: 1000000.0}, quantization: x}
+clocks: {fields: [a,b,c,d,e,f,g,h,i,j,k,l,m,n,o], ledger_model: x, forecast_admissible: x, feedback_eligible: x, negrisk_invariant: x, fixture_suite: x}
+placebo_suite: {choice: "option_2", components: [a, b, c], justification: x}
+theory_h3: {claim: x, empirical_clause: "REMOVED (R15 option 2)", artifact: {value: null, status: "PENDING", freeze_procedure: "theorem proof test before freeze required"}}
+rights: {terms_archive: x, terms_sha256: "27828b629e92eef373a9d2d91a29c349053f8a5b4cd102995a1396d3de04efd0", default_release_mode: "RESTRICT", allow_list: [], restrict_list: [], clean_path: x}
+gates: [{id: "G9a", depends_on: [], predicate: "check_g9a_search_protocol"}]
+budget: {llm_usd: {value: 250, kind: hard_cap}, overflow_eur: {value: 200, kind: hard_cap}, on_core_overrun: "NO_CONFIRMATORY"}

@@ -1,0 +1,15 @@
+manifest_version: "9.9.9"
+schema_ref: "schema/manifest.schema.json"
+meta: {date: "2026-07-13", supersedes: "x", identity_en: "short", implementation_status_honest: "toy scaffold under repair", novelty_scope: "to our knowledge, under the registered search protocol", banned_wording: [a, b, c, d, e]}
+estimand: {id: "H1", type: "observational"}
+arms: []
+replaced_arms: []
+offline_analyses: []
+memory_policy_common: {}
+score_invariance: {}
+clocks: {}
+placebo_suite: {}
+theory_h3: {}
+rights: {}
+gates: []
+budget: {}

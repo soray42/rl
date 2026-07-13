@@ -1,0 +1,52 @@
+{
+  "external": {
+    "polymarket_terms": {
+      "path": "../phase_b2/05_rights/polymarket_terms_2026-07-06/polymarket_terms_raw.txt",
+      "sha256": "27828b629e92eef373a9d2d91a29c349053f8a5b4cd102995a1396d3de04efd0"
+    },
+    "r7_failed_baseline": {
+      "path": "../archive/p1_v5_r7_failed_baseline.tar.gz",
+      "sha256": "80a43d1879359a85afa20f428d88fdeecca2300881fc44f3b64dfc1d6e398013"
+    },
+    "r9_failed_baseline_v52": {
+      "path": "../archive/p1_v5_r9_failed_baseline_v52.tar.gz",
+      "sha256": "be5258021685f99f00022833e2801fd6bc454d924c557dbfe3e1474d135a3329"
+    },
+    "v4_frozen_spec": {
+      "path": "../phase_b2/09_p1_proposal/p1_v4_spec.yaml",
+      "sha256": "84e0e9251aa03d640a205403d9d9b30a19647735c40ec11de43b15fc53b666c8"
+    }
+  },
+  "files": {
+    "README.md": "61e995fc794172e7a62b6181cf02008378db7b929d2be272968273f1c6c02628",
+    "ci.sh": "d8dc84f8d29c46cd4a3ce330278b453f4936f8a1dff69cb1c8e0391b8e2359b0",
+    "docs/search_protocol.md": "34568e6accb26b32a6b39f7911e58668ac0fdc3c89e778191c6f31cde0651fb5",
+    "manifest.json": "8946c7b60619fbbc0dbb4762318e91a44fd0b57b43cb2ddb90511112ce4ce94a",
+    "manifest.yaml": "0089743bde1692c77630c66d37a7e2bf36846142309381c22b36dfada95be753",
+    "release.sh": "4e370da2b66ac4ad68b2c803a2311fc98ba03252d523ba18690c506b508cc671",
+    "schema/manifest.schema.json": "5658139ffb73aa1d31a9b38642aa38d3fbbbe87a9f1a02fe5317b109eb4c4f28",
+    "src/p1v5/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/p1v5/checks.py": "90b2ad8d0381b9bba8560ac463add4fec439d778bb13c3b4dcadb76b74f94bd2",
+    "src/p1v5/clocks.py": "66120101fbea86b03fcd7d5677b2a6cbaaed58522b21f40e4ffcf00eb188f47b",
+    "src/p1v5/config.py": "53b09b3a4b78cea292c9608e2e7a15382953c729723b74e589e917305d1c5b28",
+    "src/p1v5/gate_runner.py": "f89923a1d53086af2be4058c3bf445b96ecb754cf3dcb37f76e68bb4b9ee53ae",
+    "src/p1v5/policy.py": "990960b9e294892aa36519c37d7d34d275454a551ddf2dd6b45627f4c01eec33",
+    "src/p1v5/scoring.py": "f9b4b89a589c167a0e9f117c5a4ba71a4d9661f91c0004f2b43b43a0d79b01bd",
+    "tests/__init__.py": "f8342a352db604f2a04747365edcacaa310bca945154b8cb37258a47d18919bd",
+    "tests/fixtures/clock_fixtures.json": "69a73f558ef5c436dcff61eb65095de661d0ebcd1cd95c3322c3a3c720153545",
+    "tests/mutants/mutant_bad_version_and_type.yaml": "d074022f4dbf322b749f29711ea394ecf9a535c0546c5807ff5dbb4a0ea98efa",
+    "tests/mutants/mutant_frozen_null_and_unknown_arm.yaml": "4c535f0d862e40da3bab0ca66915dbfc504830e9344e7d94ce335d812c783f70",
+    "tests/mutants/mutant_missing_alpha_multiplicity.yaml": "f3e07dc55f45c94425a06fa13673ecf88e32483f33fe005cb2ac442b31c2ef85",
+    "tests/mutants/mutant_r8_frozen_garbage.yaml": "f6c6ff466460ad25f4bc821a0c08ab7ca96eae41b17545ebed0f5d07eb46d61f",
+    "tests/mutants/mutant_r8_gate_and_shape_collapse.yaml": "573a5973ebcdcf0a6ac0f7c85cd85b1217a53fe2c2e5508d46012e8b2630aa95",
+    "tests/mutants/mutant_r9_predicate_swap.yaml": "0fb09ac42682b6eaaeeaed9eeb96b3843fd6283a9fccd542159ff41fb981887d",
+    "tests/test_clocks.py": "c48113667f8de2468821aa2c94a38b617115452552bbd171835f35f3c5844690",
+    "tests/test_manifest.py": "5cf607ef949888262b7f29ee7b6c9802841933b18b005e13817cf7bc2c31e8cf",
+    "tests/test_policies.py": "70e9f568f8b0aef51b0f1f498600d8cf4563c5ea7893ffaa4a6b5e2441b1025e",
+    "tests/test_regressions_r7.py": "43efa818f55e6533631c589f8fdc0d8042f4d3e38c7f419db9f4301a9a93c7e9",
+    "tests/test_regressions_r8.py": "447c88e65631a7e2dee5627a05b81359618d736b16309f746ad394e88328da73",
+    "tests/test_regressions_r9.py": "cba66098c913aa9da5f8ff77ec7a2c925e60129841228a62d9ae3f5d9f101fd1",
+    "tools/refresh_lock.py": "38f5ce26bcf7e528bc49994dd9172e3fdf4207d3fcc75134fc5e03409ea6ff3e",
+    "tools/verify_lock.py": "633c27a75a2fb08a2918ca88a1d61f791a070eaf85d69729f715e0775358da54"
+  }
+}

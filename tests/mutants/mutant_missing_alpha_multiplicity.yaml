@@ -1,0 +1,25 @@
+manifest_version: "5.1.0"
+schema_ref: "schema/manifest.schema.json"
+meta: {date: "2026-07-13", supersedes: "x", identity_en: "A preregistered prospective comparative-effectiveness study of complete multi-agent credit-conditioned external-memory policies on real prediction-market events with long identity text.", implementation_status_honest: "runnable scaffold under repair contract", novelty_scope: "to our knowledge, under the registered search protocol", banned_wording: [a, b, c, d, e]}
+estimand:
+  id: "H1"
+  type: "randomized_policy_ITT"
+  conditioning: "realized_chronological_event_stream"
+  resource_semantics: "resource_inclusive"
+  superpopulation_claim: "secondary_sensitivity_only"
+  assignment: {unit: "trajectory", allocation: "equal", blocking: "wave", trajectories_per_arm_K: {value: null, status: "PENDING", freeze_procedure: "G6 simulation output frozen at prereg"}, seed_schedule: "per_trajectory_seed = sha256(root + index) recorded", noncompliance: "ITT regardless of failures"}
+  population_frame: {source: "polymarket_public_api", unit: "binary_market_question", weighting: "equal_weight_per_eligible_market", dependence_handling: "cluster_by_event_family", inclusion_rulebook: {value: null, status: "PENDING", freeze_procedure: "rulebook frozen before first acquisition"}}
+  endpoint: {metric: "per_eligible_market_mean_brier", cumulative_mapping: "x", brier_convention: "x", failure_loss: 1.0, failure_note: "x", fifty_fifty_handling: "excluded_from_endpoint_with_preregistered_attrition_sensitivity", too_early_handling: "x", unresolved_handling: "x", coverage_rule: "forced_forecast_all_enrolled_markets", horizon_T: {value: null, status: "PENDING", freeze_procedure: "G6 simulation output frozen at prereg"}, label_follow_up_days: {value: null, status: "PENDING", freeze_procedure: "frozen with horizon at prereg"}}
+  contrasts: {coprimary: [{id: "C1", arm_a: "a", arm_b: "b"}, {id: "C2", arm_a: "c", arm_b: "d"}]}
+  decision_rule: {kind: "four_way_interval", branches: [a, b, c, d], equivalence_requires: "x", harm_mechanism_note: "x"}
+arms: [{id: "no_update", role: r, credit_source: c, implementation_status: "toy_scaffold"}, {id: "shared_surplus", role: r, credit_source: c, implementation_status: "toy_scaffold"}, {id: "diff_agent_credit", role: r, credit_source: c, implementation_status: "toy_scaffold"}, {id: "c3_action", role: r, credit_source: c, implementation_status: "toy_scaffold"}, {id: "c3_compute_matched_sham", role: r, credit_source: c, implementation_status: "toy_scaffold"}]
+replaced_arms: []
+offline_analyses: []
+memory_policy_common: {capacity_items: 64, admission_top_k: 8, retrieval_top_m: 8, retrieval_order: x, tie_break: x, eviction: x, write_source: x, rng: x}
+score_invariance: {contract: x, admissible_domain: {a_abs_max: 1000000.0, b_min: 0.000001, b_max: 1000000.0}, quantization: x}
+clocks: {fields: [a,b,c,d,e,f,g,h,i,j,k,l,m,n,o], ledger_model: x, forecast_admissible: x, feedback_eligible: x, negrisk_invariant: x, fixture_suite: x}
+placebo_suite: {choice: "option_2", components: [a, b, c], justification: x}
+theory_h3: {claim: x, empirical_clause: "REMOVED (R15 option 2)", artifact: {value: null, status: "PENDING", freeze_procedure: "theorem proof test before freeze required"}}
+rights: {terms_archive: x, terms_sha256: "27828b629e92eef373a9d2d91a29c349053f8a5b4cd102995a1396d3de04efd0", default_release_mode: "RESTRICT", allow_list: [], restrict_list: [], clean_path: x}
+gates: [{id: "G9a", depends_on: [], predicate: "check_g9a_search_protocol"}, {id: "G0", depends_on: [G9a], predicate: "check_g0_manifest"}, {id: "G1", depends_on: [G0], predicate: "check_g1_estimators"}, {id: "G2", depends_on: [G1], predicate: "check_g2_invariance"}, {id: "G3", depends_on: [G2], predicate: "check_g3_clocks"}, {id: "G8", depends_on: [G2], predicate: "evidence_gate", evidence_path: "evidence/g8.json"}, {id: "G4", depends_on: [G3], predicate: "evidence_gate", evidence_path: "evidence/g4.json"}, {id: "G10", depends_on: [G3], predicate: "check_g10_placebos"}, {id: "G7a", depends_on: [G3], predicate: "evidence_gate", evidence_path: "evidence/g7a.json"}, {id: "G5a", depends_on: [G4, G10, G7a], predicate: "evidence_gate", evidence_path: "evidence/g5a.json"}, {id: "G6", depends_on: [G5a], predicate: "evidence_gate", evidence_path: "evidence/g6.json"}, {id: "G5b", depends_on: [G6], predicate: "evidence_gate", evidence_path: "evidence/g5b.json"}, {id: "G7b", depends_on: [G6], predicate: "evidence_gate", evidence_path: "evidence/g7b.json"}, {id: "G9b", depends_on: [G5b, G7b], predicate: "evidence_gate", evidence_path: "evidence/g9b.json"}, {id: "LOCK", depends_on: [G9b, G8], predicate: "check_lock_artifacts"}, {id: "FREEZE", depends_on: [LOCK], predicate: "check_freeze_preconditions"}]
+budget: {llm_usd: {value: 250, kind: hard_cap}, overflow_eur: {value: 200, kind: hard_cap}, on_core_overrun: "NO_CONFIRMATORY"}

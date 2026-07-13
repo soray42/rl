@@ -1,0 +1,20 @@
+{
+  "suite": "G3 settlement/clock fixtures (implemented in tests/test_clocks.py)",
+  "fixtures": [
+    {"id": "F01", "covers": "undisputed proposal -> final", "attack_ref": "A10"},
+    {"id": "F02", "covers": "first dispute -> reset -> second proposal", "attack_ref": "A10"},
+    {"id": "F03", "covers": "second dispute -> DVM", "attack_ref": "A10"},
+    {"id": "F04", "covers": "DVM Too Early -> new round (non-terminal)", "attack_ref": "A10"},
+    {"id": "F05", "covers": "proposer/disputer outcome mapping", "attack_ref": "A10"},
+    {"id": "F06", "covers": "Unknown/50-50 terminal payout, endpoint-excluded", "attack_ref": "A11"},
+    {"id": "F07", "covers": "clarification before forecast (rules version bump)", "attack_ref": "A10"},
+    {"id": "F08", "covers": "clarification after forecast, no retroaction", "attack_ref": "A10"},
+    {"id": "F09", "covers": "onchain final, API lagging (observation clock)", "attack_ref": "A09"},
+    {"id": "F10", "covers": "duplicate/out-of-order ingestion idempotent", "attack_ref": "A10"},
+    {"id": "F11", "covers": "late backfill never changes frozen prompt hash", "attack_ref": "A09"},
+    {"id": "F12", "covers": "same-timestamp deterministic content tie-break", "attack_ref": "A10"},
+    {"id": "F13", "covers": "indefinitely unresolved -> censored", "attack_ref": "A23"},
+    {"id": "F14", "covers": "outcome public before oracle final -> REJECT forecast", "attack_ref": "A08"},
+    {"id": "F15", "covers": "neg-risk group settles consistently", "attack_ref": "A16"}
+  ]
+}
