@@ -57,11 +57,21 @@ class QuestionState:
         return self.is_final() and self.terminal_outcome_kind in ("yes", "no")
 
 
+def _finite(x) -> bool:
+    import math
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
 def _validate_event(msg: dict) -> Optional[str]:
     import math
     for req in ("msg_id", "source", "question_id", "kind", "t"):
         if req not in msg:
             return f"missing field {req}"
+    for sid in ("msg_id", "source", "question_id"):
+        if not isinstance(msg[sid], str) or not msg[sid]:
+            return f"{sid} must be a non-empty string"     # typed ids: canonical sort safety
+    if "group_id" in msg and msg["group_id"] is not None and not isinstance(msg["group_id"], str):
+        return "group_id must be a string"
     if msg["kind"] not in EVENT_KINDS:
         return f"unknown kind {msg['kind']}"
     if (not isinstance(msg["t"], (int, float)) or isinstance(msg["t"], bool)
@@ -122,12 +132,18 @@ def _fold_one(cur: QuestionState, msg: dict) -> QuestionState:
             return _quarantine(cur, "challenge without matching live proposal")
         return replace(cur, oracle_status="challenged")
     if kind == "dispute_reset":
+        # official flow (T10-R3): ONLY the first challenge resets to a new proposal
         if cur.oracle_status != "challenged":
             return _quarantine(cur, "dispute_reset without challenge")
+        if cur.oracle_round != 1:
+            return _quarantine(cur, f"dispute_reset at round {cur.oracle_round}: second+ challenge must go to DVM")
         return replace(cur, oracle_status="none")
     if kind == "dvm":
+        # official flow (T10-R3): DVM is reachable ONLY from the second+ challenge
         if cur.oracle_status != "challenged":
-            return _quarantine(cur, "dvm without second challenge")
+            return _quarantine(cur, "dvm without challenge")
+        if cur.oracle_round < 2:
+            return _quarantine(cur, "dvm after FIRST challenge: must dispute_reset instead")
         return replace(cur, oracle_status="dvm")
     if kind == "dvm_too_early":
         if cur.oracle_status != "dvm":
@@ -219,6 +235,8 @@ class Ledger:
     # -- admissibility -----------------------------------------------------
     @staticmethod
     def forecast_admissible(q: QuestionState, input_at: float, forecast_at: float) -> bool:
+        if not (_finite(input_at) and _finite(forecast_at)):   # T10 §6.2: non-finite args fail closed
+            return False
         if q.quarantined or not q.enrolled:
             return False
         if q.trading_state != "open" or q.is_final():
@@ -231,6 +249,8 @@ class Ledger:
 
     @staticmethod
     def feedback_eligible(q: QuestionState, prompt_state_cutoff: float, forecast_at: float) -> bool:
+        if not (_finite(prompt_state_cutoff) and _finite(forecast_at)):
+            return False
         if q.quarantined or not q.is_final():
             return False
         if q.observed_at is None or q.applied_at is None:
@@ -242,6 +262,13 @@ class Ledger:
     def freeze_prompt(self, forecast_id: str, prompt_state_cutoff: float,
                       forecast_at: float, memory_sha: str = "0" * 64,
                       model_config: str = "toy") -> str:
+        import re as _re
+        if not isinstance(forecast_id, str) or not forecast_id:
+            raise ClockError("forecast_id must be a non-empty string")
+        if not (_finite(prompt_state_cutoff) and _finite(forecast_at)):
+            raise ClockError("non-finite commitment timestamps refused")
+        if not _re.fullmatch(r"[0-9a-f]{64}", memory_sha):
+            raise ClockError("memory_sha must be 64-hex")
         if forecast_id in self.commitments:
             raise ClockError(f"forecast_id {forecast_id} already committed (write-once)")
         states = self.all_states()

@@ -158,8 +158,9 @@ class TestEvidenceSemantics(unittest.TestCase):
 
 
 class TestEvidenceLockLoopBroken(unittest.TestCase):
-    """N9-R2: from a locked tree, a real evidence file can PASS while the input
-    lock stays valid — the r9 self-reference loop is gone."""
+    """N9-R2 regression, T10-R1 REWRITTEN: never occupies a canonical evidence
+    path. If real canonical evidence exists we verify coexistence with the lock;
+    the PASS-path demonstration always uses a unique temporary evidence file."""
 
     def test_valid_evidence_and_lock_coexist(self):
         from p1v5.config import manifest_sha256
@@ -172,8 +173,20 @@ class TestEvidenceLockLoopBroken(unittest.TestCase):
         cur_l = hashlib.sha256(LOCK_PATH.read_bytes()).hexdigest()
         ev_dir = ROOT / "evidence"
         ev_dir.mkdir(exist_ok=True)
-        p = ev_dir / "g8_rights_matrix.json"
-        assert not p.exists(), "real evidence already present; test must not clobber"
+
+        canonical = ev_dir / "g8_rights_matrix.json"
+        if canonical.exists():
+            # future real artifact: it must COEXIST with a valid lock (never PENDING)
+            res = eval_evidence_gate({"id": "G8",
+                                      "evidence_path": "evidence/g8_rights_matrix.json"},
+                                     cur_m, cur_l)
+            self.assertIn(res["status"], ("PASS", "FAIL"))
+            ok1, ev1 = verify_lock()
+            self.assertTrue(ok1, ev1)
+            return
+
+        import uuid
+        p = ev_dir / f"tmp_loop_regression_{uuid.uuid4().hex}.json"
         p.write_text(json.dumps({
             "produced_by": "loop-regression-fixture",
             "produced_at_utc": "2026-07-13T12:00:00+00:00",
@@ -182,7 +195,7 @@ class TestEvidenceLockLoopBroken(unittest.TestCase):
                         "terms_sha256": PINNED_TERMS_SHA},
             "verdict": "PASS"}))
         try:
-            gate = {"id": "G8", "evidence_path": "evidence/g8_rights_matrix.json"}
+            gate = {"id": "G8", "evidence_path": f"evidence/{p.name}"}
             res = eval_evidence_gate(gate, cur_m, cur_l)
             self.assertEqual(res["status"], "PASS", res)
             ok1, ev1 = verify_lock()      # evidence/ excluded => lock still valid

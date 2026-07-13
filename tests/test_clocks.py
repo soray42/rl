@@ -216,6 +216,41 @@ def fixture_results():
         led.ingest(m)
     res["f14_outcome_known_rejected"] = not Ledger.forecast_admissible(led.state("Q1"), 10.5, 11.0)
 
+    # F16 (T10-R3 反例A): FIRST challenge -> dvm is ILLEGAL, must quarantine
+    led = Ledger()
+    for m in _msgs("Q1", [
+        {"kind": "enroll", "t": 0.0, "prediction_cutoff": 49.0},
+        {"kind": "proposal", "round": 1, "t": 51.0},
+        {"kind": "challenge", "round": 1, "t": 52.0},
+        {"kind": "dvm", "t": 53.0},
+        {"kind": "finalize", "outcome": "yes", "t": 90.0},
+        {"kind": "observe", "t": 91.0},
+        {"kind": "apply_queue", "t": 92.0},
+    ], "F16"):
+        led.ingest(m)
+    q = led.state("Q1")
+    res["f16_first_challenge_dvm_quarantined"] = (
+        q.quarantined and not q.endpoint_eligible()
+        and not Ledger.feedback_eligible(q, 95.0, 96.0))
+
+    # F17 (T10-R3 反例B): SECOND challenge -> dispute_reset is ILLEGAL
+    led = Ledger()
+    for m in _msgs("Q1", [
+        {"kind": "enroll", "t": 0.0, "prediction_cutoff": 49.0},
+        {"kind": "proposal", "round": 1, "t": 51.0},
+        {"kind": "challenge", "round": 1, "t": 52.0},
+        {"kind": "dispute_reset", "t": 52.5},
+        {"kind": "proposal", "round": 2, "t": 60.0},
+        {"kind": "challenge", "round": 2, "t": 61.0},
+        {"kind": "dispute_reset", "t": 61.5},
+        {"kind": "proposal", "round": 3, "t": 70.0},
+        {"kind": "finalize", "outcome": "yes", "t": 72.0},
+    ], "F17"):
+        led.ingest(m)
+    q = led.state("Q1")
+    res["f17_second_challenge_reset_quarantined"] = (
+        q.quarantined and not q.endpoint_eligible())
+
     # F15 neg-risk: consistent group passes; two-YES group quarantined entirely
     led = Ledger()
     for qid, outcome in [("G-w", "yes"), ("G-l", "no")]:
@@ -248,7 +283,7 @@ class TestClockFixtures(unittest.TestCase):
         ok, res = run_all_fixtures()
         failing = [k for k, v in res.items() if v != "PASS"]
         self.assertEqual(failing, [], f"failing fixtures: {failing}")
-        self.assertEqual(len(res), 15)
+        self.assertEqual(len(res), 17)
 
 
 if __name__ == "__main__":

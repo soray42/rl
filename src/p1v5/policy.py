@@ -63,8 +63,9 @@ class MemoryState:
         cfg = get_config()
         items = self.items + sorted(new_items, key=lambda i: (i.rank, i.key))
         if len(items) > cfg.capacity_items:
-            # eviction: lowest |ratio| first, then oldest feedback clock, then key
-            items = sorted(items, key=lambda i: (-abs(i.ratio), i.feedback_clock, i.key),
+            # eviction per manifest: evict lowest |ratio| first, then OLDEST feedback
+            # clock (T10 §6.1: keep-priority = higher ratio, then NEWER clock)
+            items = sorted(items, key=lambda i: (-abs(i.ratio), -i.feedback_clock, i.key),
                            )[:cfg.capacity_items]
         return MemoryState(items, self.applied_batches | {batch_id})
 

@@ -279,7 +279,7 @@
       "predicate": "check_freeze_preconditions"
     }
   ],
-  "manifest_version": "5.3.0",
+  "manifest_version": "5.3.1",
   "memory_policy_common": {
     "admission_top_k": 8,
     "capacity_items": 64,
@@ -306,7 +306,7 @@
     "identity_en": "A preregistered prospective comparative-effectiveness study of complete multi-agent credit-conditioned external-memory policies on real prediction-market events, using pre-outcome forecast commitments, delayed-resolution update clocks, and a recomputable intervention ledger.",
     "implementation_status_honest": "runnable scaffold under repair contract E0-E12; NOT a freezable experiment system",
     "novelty_scope": "to our knowledge, under the registered search protocol",
-    "supersedes": "p1_v5 5.2.0 (round-9 engineering BLOCK: gate-spec semantics unpinned, evidence-lock self-reference)"
+    "supersedes": "p1_v5 5.3.0 (round-10 BLOCK: canonical-path test landmine, evidence semantics, DVM round paths)"
   },
   "offline_analyses": [
     {

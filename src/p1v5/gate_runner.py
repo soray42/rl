@@ -89,17 +89,46 @@ PINNED_TERMS_SHA = "27828b629e92eef373a9d2d91a29c349053f8a5b4cd102995a1396d3de04
 
 
 def _verdict_rules(manifest):
+    """T10-R2: cross-field relations included; thresholds come from the manifest
+    where the manifest defines them (alpha), never from a looser hard-code."""
     llm_cap = manifest["budget"]["llm_usd"]["value"]
+    alpha = manifest["estimand"]["contrasts"]["alpha"]
     return {
-        "G8": lambda x: x["terms_sha256"] == PINNED_TERMS_SHA and x["n_fields_analyzed"] >= 10,
+        "G8": lambda x: (x["terms_sha256"] == PINNED_TERMS_SHA
+                         and x["n_fields_analyzed"] >= 10
+                         and x["n_allow"] + x["n_restrict"] == x["n_fields_analyzed"]),
         "G4": lambda x: x["replay_fidelity"] >= 0.90 and x["n_replayed"] >= 10,
-        "G7a": lambda x: x["cost_error_pct"] <= 20 and x["n_dry_run_events"] >= 5,
+        "G7a": lambda x: (x["cost_error_pct"] <= 20 and x["n_dry_run_events"] >= 5
+                          and x["cost_usd_estimate"] <= llm_cap),
         "G5a": lambda x: x["independent_family_transitions"] >= x["required_by_g6"],
-        "G6": lambda x: x["type1_ucb"] <= 0.06 and x["power_lcb"] >= 0.80 and x["n_sims"] >= 1000,
-        "G5b": lambda x: x["calendar_ok"] is True,
+        "G6": lambda x: (x["type1_ucb"] <= alpha and x["power_lcb"] >= 0.80
+                         and x["n_sims"] >= 1000),
+        "G5b": lambda x: x["calendar_ok"] is True and x["weeks_required"] <= 52,
         "G7b": lambda x: x["within_hard_cap"] is True and x["total_cost_usd"] <= llm_cap,
         "G9b": lambda x: x["intersection_touched"] is False,
     }
+
+
+# T10-R2 #5: metric hashes that must be RECOMPUTED against a content-addressed
+# target file; a hash with no recomputable referent can never support PASS.
+HASH_BINDINGS = {
+    "G6": ("delta_frozen_sha256", "docs/delta_decision.md"),
+    "G9b": ("search_log_sha256", "evidence/g9b_search_log.jsonl"),
+}
+
+
+def _assert_evidence_finite(node, path="$"):
+    import math
+    if isinstance(node, float) and not math.isfinite(node):
+        raise ValueError(f"non-finite number at {path}")
+    if isinstance(node, bool):
+        return
+    if isinstance(node, dict):
+        for k, v in node.items():
+            _assert_evidence_finite(v, f"{path}.{k}")
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            _assert_evidence_finite(v, f"{path}[{i}]")
 
 
 def _parse_utc(ts: str):
@@ -143,8 +172,9 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
         return {"status": "PENDING", "reason": f"evidence artifact absent: {gate['evidence_path']}"}
     try:
         e = json.loads(p.read_text(), parse_constant=lambda n: (_ for _ in ()).throw(ValueError(n)))
+        _assert_evidence_finite(e)          # T10-R2 #1: 1e999-style overflow refused
     except Exception as exc:
-        return {"status": "FAIL", "reason": f"evidence unreadable/non-strict: {exc}"}
+        return {"status": "FAIL", "reason": f"evidence unreadable/non-strict/non-finite: {exc}"}
     schema = EVIDENCE_SCHEMAS.get(gate["id"])
     if schema is None:
         return {"status": "FAIL", "reason": f"no evidence schema registered for {gate['id']}"}
@@ -158,6 +188,17 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
         return {"status": "FAIL", "reason": "evidence not bound to CURRENT manifest hash"}
     if e["inputs"]["input_lock_sha256"] != current_lock_sha:
         return {"status": "FAIL", "reason": "evidence not bound to CURRENT input lock hash"}
+    binding = HASH_BINDINGS.get(gate["id"])
+    if binding is not None:
+        key, target_rel = binding
+        target = ROOT / target_rel
+        if not target.exists():
+            return {"status": "FAIL",
+                    "reason": f"hash metric {key} has no recomputable target ({target_rel} missing)"}
+        got = hashlib.sha256(target.read_bytes()).hexdigest()
+        if e["metrics"][key] != got:
+            return {"status": "FAIL",
+                    "reason": f"{key} does not match recomputed hash of {target_rel}"}
     computed = "PASS" if _verdict_rules(manifest)[gate["id"]](e["metrics"]) else "FAIL"
     if e["verdict"] != computed:
         return {"status": "FAIL",
@@ -240,9 +281,11 @@ def run(release: bool = False):
 
     if release:
         # N9-R2 release attestation: input lock + ALL evidence + results + env
+        success = (n["FAIL"] == 0 and n["PENDING"] == 0)
         attestation = {
             "attestation_kind": "p1v5_release_attestation_v1",
             "envelope": envelope,
+            "success": success,
             "input_lock_sha256": cur_lock,
             "external_pins": {k: v["sha256"] for k, v in EXTERNAL_PINS.items()},
             "evidence_sha256": _evidence_hashes(),
@@ -252,9 +295,14 @@ def run(release: bool = False):
         att_hash = _body_hash(attestation)
         (build / "release_attestation.json").write_text(
             json.dumps({"body": attestation, "body_sha256": att_hash}, indent=2))
-        # N9-R4: ONLY the explicit release action touches the out-of-repo anchor
-        ATTESTATION_ANCHOR_PATH.write_text(
-            att_hash + "  p1_v5 release attestation body hash\n")
+        with open(build / "release_attempts.log", "a") as f:
+            f.write(f"{envelope['run_utc']} run_id={envelope['run_id']} "
+                    f"success={success} attestation={att_hash}\n")
+        # T10 P1: a FAILED release attempt must never overwrite the
+        # latest-success anchor; only a fully green release publishes it.
+        if success:
+            ATTESTATION_ANCHOR_PATH.write_text(
+                att_hash + "  p1_v5 latest SUCCESSFUL release attestation\n")
 
     print(f"gate_runner[{'RELEASE' if release else 'readiness'}] "
           f"run_id={envelope['run_id']} PASS={n['PASS']} FAIL={n['FAIL']} PENDING={n['PENDING']}")
@@ -290,6 +338,20 @@ def verify_status_file() -> bool:
             return False
         prev = line.split("body=")[-1].strip()
     return True
+
+
+def verify_release_attestation() -> bool:
+    """Read-only verifier (T10 P1): the published anchor must correspond to a
+    SUCCESSFUL release attestation whose self-hash matches."""
+    p = ROOT / "build/release_attestation.json"
+    if not p.exists() or not ATTESTATION_ANCHOR_PATH.exists():
+        return False
+    doc = json.loads(p.read_text())
+    if _body_hash(doc["body"]) != doc["body_sha256"]:
+        return False
+    if doc["body"].get("success") is not True:
+        return False
+    return ATTESTATION_ANCHOR_PATH.read_text().split()[0] == doc["body_sha256"]
 
 
 RUNNER_PREDICATES = dict(PREDICATES)
