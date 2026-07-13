@@ -26,7 +26,7 @@ from p1v5.scoring import score_stream  # noqa: E402
 
 PRICE_IN_PER_MTOK = {"stub-1": 0.0, "deepseek/deepseek-v4-flash": 0.09}
 PRICE_OUT_PER_MTOK = {"stub-1": 0.0, "deepseek/deepseek-v4-flash": 0.18}
-CHARS_PER_TOKEN = 4.0
+CHARS_PER_TOKEN = 2.43   # calibrated from first live dry-run: 405,078 chars / 166,919 billed tokens
 HARD_CAP_USD = 5.0
 
 
