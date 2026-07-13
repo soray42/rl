@@ -1,0 +1,15 @@
+{
+  "produced_by": "tools/make_g8_evidence.py over docs/g8_rights_matrix.md (sha eb09bd28f05cdaf1)",
+  "produced_at_utc": "2026-07-13T18:22:34+00:00",
+  "inputs": {
+    "manifest_sha256": "d8c975c424eada77b52a1c19d224a3d364ee7c4cda30af55c1e1cd209e59c932",
+    "input_lock_sha256": "d15130f9f85460cec50d8b4ae95b9419194d9951758fca7fd6fc8a8a6ce137aa"
+  },
+  "metrics": {
+    "n_fields_analyzed": 14,
+    "n_allow": 8,
+    "n_restrict": 6,
+    "terms_sha256": "27828b629e92eef373a9d2d91a29c349053f8a5b4cd102995a1396d3de04efd0"
+  },
+  "verdict": "PASS"
+}

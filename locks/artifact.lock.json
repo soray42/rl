@@ -20,6 +20,8 @@
   "files": {
     "README.md": "61e995fc794172e7a62b6181cf02008378db7b929d2be272968273f1c6c02628",
     "ci.sh": "d8dc84f8d29c46cd4a3ce330278b453f4936f8a1dff69cb1c8e0391b8e2359b0",
+    "docs/delta_decision.md": "e976268aa9986d9660add24a66057c9730ebffe73330c631a62d07fd178af8a1",
+    "docs/g8_rights_matrix.md": "eb09bd28f05cdaf13b000f934e8dfefafa6116c62977ad3ab8fe817a1427df37",
     "docs/search_protocol.md": "34568e6accb26b32a6b39f7911e58668ac0fdc3c89e778191c6f31cde0651fb5",
     "manifest.json": "d8c975c424eada77b52a1c19d224a3d364ee7c4cda30af55c1e1cd209e59c932",
     "manifest.yaml": "c25e278a82458329d3335ffce7dfc8071fc3bec04ff50fff5febf2b795abe031",
@@ -31,6 +33,7 @@
     "src/p1v5/clocks.py": "1afea3c8fd4754d303125af42f8042b361413b39eb7b6a62db763ed34e44a165",
     "src/p1v5/collector.py": "07e2eb64dcfc184e00fd55b7fa5b2d43dfc37f6cb46d6323dbb90a02ac8b16da",
     "src/p1v5/config.py": "53b09b3a4b78cea292c9608e2e7a15382953c729723b74e589e917305d1c5b28",
+    "src/p1v5/deliberation.py": "d72c4810cd5d7afd86f99e5b63e62059bbe67cdbb87359fa021ecd8045966603",
     "src/p1v5/gate_runner.py": "849c04017bfa4b5b31d24d808cb2cb98393019c9cc5edded49946c17ac8de73b",
     "src/p1v5/policy.py": "6a9add8469ee91862d7b15b78f2fbba7feaeba0ab434a58427687fa3fc4b36a1",
     "src/p1v5/scoring.py": "f9b4b89a589c167a0e9f117c5a4ba71a4d9661f91c0004f2b43b43a0d79b01bd",
@@ -44,12 +47,15 @@
     "tests/mutants/mutant_r9_predicate_swap.yaml": "0fb09ac42682b6eaaeeaed9eeb96b3843fd6283a9fccd542159ff41fb981887d",
     "tests/test_analysis.py": "804e03d70a35e31d159b96292db07e87b1beccb231497019daf26199ac9ac1ff",
     "tests/test_clocks.py": "4cf920b0b49d77f8fcc683e7d9b9374c026b4501e7cb68a116dc7157ab96e2ba",
+    "tests/test_deliberation.py": "d55fdd176aff90e94f25c4d0190602c20e53d72f810808a02fa9e55ad69fc517",
     "tests/test_manifest.py": "5cf607ef949888262b7f29ee7b6c9802841933b18b005e13817cf7bc2c31e8cf",
     "tests/test_policies.py": "70e9f568f8b0aef51b0f1f498600d8cf4563c5ea7893ffaa4a6b5e2441b1025e",
-    "tests/test_regressions_r10.py": "b8f8a809f91be76976b2a5a425dd1ad4ccefed2c064c885291ec5268908de38f",
+    "tests/test_regressions_r10.py": "753db6bec75f042ca8fe2f9c02812757a31ec4d3d8014c2261a44a96dd106ff7",
     "tests/test_regressions_r7.py": "43efa818f55e6533631c589f8fdc0d8042f4d3e38c7f419db9f4301a9a93c7e9",
     "tests/test_regressions_r8.py": "447c88e65631a7e2dee5627a05b81359618d736b16309f746ad394e88328da73",
     "tests/test_regressions_r9.py": "01d2ef495afabaed7852846b4f66d263a01a613266bbf7d632046886e94ae71f",
+    "tools/make_g8_evidence.py": "77685df53b77a3f4455202357adb716ff5d9db44470eceb11c344bb95e75bb3c",
+    "tools/micro_pilot.py": "bf018249f483aa74d7d3294dfaeb3c656096cb28658c65d523f18803247399f7",
     "tools/refresh_lock.py": "38f5ce26bcf7e528bc49994dd9172e3fdf4207d3fcc75134fc5e03409ea6ff3e",
     "tools/verify_lock.py": "633c27a75a2fb08a2918ca88a1d61f791a070eaf85d69729f715e0775358da54"
   }
