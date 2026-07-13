@@ -24,8 +24,8 @@ from p1v5.deliberation import (OpenRouterBackend, StubBackend, TeamDeliberation,
 from p1v5.policy import MemoryState  # noqa: E402
 from p1v5.scoring import score_stream  # noqa: E402
 
-PRICE_PER_MTOK = {"stub-1": 0.0, "qwen/qwen3-235b-a22b-2507": 0.10,
-                  "meta-llama/llama-4-scout": 0.08}
+PRICE_IN_PER_MTOK = {"stub-1": 0.0, "deepseek/deepseek-v4-flash": 0.09}
+PRICE_OUT_PER_MTOK = {"stub-1": 0.0, "deepseek/deepseek-v4-flash": 0.18}
 CHARS_PER_TOKEN = 4.0
 HARD_CAP_USD = 5.0
 
@@ -34,11 +34,15 @@ def load_questions(n: int) -> list:
     views = sorted((ROOT / "data/views").glob("two_clock_view_*.jsonl"))
     if not views:
         raise SystemExit("no collected data; run collector first")
-    qs = []
+    qs, seen_events = [], set()
     for line in views[-1].read_text().splitlines():
         v = json.loads(line)
         if (v["uma_status"] == "resolved" and v["outcome_gamma_coarse"] in ("yes", "no")
                 and not v["neg_risk"] and v["question"]):
+            evs = set(v["event_ids"] or [v["market_id"]])
+            if evs & seen_events:      # shadow r1 P0-2: one market per event, no siblings
+                continue
+            seen_events.update(evs)
             qs.append({"question_id": v["market_id"], "question": v["question"],
                        "y": 1 if v["outcome_gamma_coarse"] == "yes" else 0})
         if len(qs) >= n:
@@ -50,7 +54,7 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
     if mode == "dry":
         backend, model = StubBackend(), "stub-1"
     else:
-        model = "qwen/qwen3-235b-a22b-2507"
+        model = "deepseek/deepseek-v4-flash"
         backend = OpenRouterBackend(model)
     questions = load_questions(n_questions)
     slices = [f"private evidence slice {i} (dev tier: question text only)"
@@ -61,6 +65,7 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
         team = TeamDeliberation(backend, n_agents)
         memory = MemoryState()
         forecasts, chars = {}, 0
+        chars_in = chars_out = 0
         for k, q in enumerate(questions):
             t = team.run(q, slices, memory, seed=1000 + k)
             forecasts[q["question_id"]] = t.final_q
@@ -79,20 +84,43 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
                                            seed=2000 + k, batch_id=batch)
             memory = update_memory_from_credits(
                 memory, credits, feedback_clock=float(k), batch_id=batch,
-                texts={a: f"on '{q['question'][:60]}' outcome={y}, {a} was "
-                          f"{'credited' if credits.get(a, 0) > 0 else 'not credited'}"
+                # shadow r1 P0-2: memory text encodes CREDIT signal only, never
+                # the settlement outcome literal (leak path to sibling markets)
+                texts={a: f"on '{q['question'][:60]}': {a} was "
+                          f"{'credited' if credits.get(a, 0) > 0 else 'not credited'} "
+                          f"for its contribution"
                        for a in credits})
             chars += sum(r.prompt_chars + r.output_chars for r in t.receipts)
+            chars_in += sum(r.prompt_chars for r in t.receipts)
+            chars_out += sum(r.output_chars for r in t.receipts)
+            report["billed_prompt_tokens"] = report.get("billed_prompt_tokens", 0) + sum(
+                r.prompt_tokens for r in t.receipts)
+            report["billed_completion_tokens"] = report.get("billed_completion_tokens", 0) + sum(
+                r.completion_tokens for r in t.receipts)
+            if mode == "live":       # shadow r1 F7: cap checked per QUESTION, not per arm
+                spent = (report.get("billed_prompt_tokens", 0) / 1e6 * PRICE_IN_PER_MTOK[model]
+                         + report.get("billed_completion_tokens", 0) / 1e6 * PRICE_OUT_PER_MTOK[model])
+                if spent > HARD_CAP_USD:
+                    raise SystemExit(f"hard cap ${HARD_CAP_USD} hit mid-run (${spent:.2f}); aborting")
         outcomes = {q["question_id"]: q["y"] for q in questions}
         s = score_stream(forecasts, outcomes, [q["question_id"] for q in questions])
-        est_cost = (chars / CHARS_PER_TOKEN) / 1e6 * PRICE_PER_MTOK[model]
+        # shadow r1 F7: split in/out prices (average-price estimator biased)
+        est_cost = ((chars_in / CHARS_PER_TOKEN) / 1e6 * PRICE_IN_PER_MTOK[model]
+                    + (chars_out / CHARS_PER_TOKEN) / 1e6 * PRICE_OUT_PER_MTOK[model])
         report["arms"][arm] = {"mean_brier": round(s["mean_brier"], 4),
                                "failure_rate": s["failure_rate"],
                                "chars": chars, "est_cost_usd": round(est_cost, 4)}
         report["receipt_chars_total"] += chars
+        # per-arm checkpoint: a timeout kill never loses completed arms
+        ckpt = ROOT / "build" / f"micro_pilot_{mode}_partial.json"
+        ckpt.parent.mkdir(exist_ok=True)
+        ckpt.write_text(json.dumps(report, indent=2, ensure_ascii=False))
         if mode == "live" and sum(a["est_cost_usd"] for a in report["arms"].values()) > HARD_CAP_USD:
             raise SystemExit("hard cap reached; aborting live pilot")
     report["est_total_cost_usd"] = round(sum(a["est_cost_usd"] for a in report["arms"].values()), 4)
+    report["billed_cost_usd"] = round(
+        report.get("billed_prompt_tokens", 0) / 1e6 * PRICE_IN_PER_MTOK[model]
+        + report.get("billed_completion_tokens", 0) / 1e6 * PRICE_OUT_PER_MTOK[model], 4)
     report["produced_at_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     out = ROOT / "build" / f"micro_pilot_{mode}.json"
     out.parent.mkdir(exist_ok=True)

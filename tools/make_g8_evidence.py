@@ -19,6 +19,11 @@ from p1v5.gate_runner import PINNED_TERMS_SHA  # noqa: E402
 def main() -> int:
     matrix = (ROOT / "docs/g8_rights_matrix.md").read_text()
     rows = re.findall(r"^\|\s*\d+\s*\|.*\*\*(ALLOW|RESTRICT)\*\*", matrix, re.MULTILINE)
+    numbered = re.findall(r"^\|\s*\d+\s*\|", matrix, re.MULTILINE)
+    if len(numbered) != len(rows):   # shadow r1 F5: silently dropped rows must FAIL
+        print(f"row-count mismatch: {len(numbered)} numbered rows vs {len(rows)} with a "
+              f"parseable mode — refusing to emit evidence")
+        return 2
     n_allow = sum(1 for r in rows if r == "ALLOW")
     n_restrict = sum(1 for r in rows if r == "RESTRICT")
     if not LOCK_PATH.exists():

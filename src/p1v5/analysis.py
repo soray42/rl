@@ -116,6 +116,9 @@ def crossed_bootstrap_taus(records: list, arm_a: str, arm_b: str,
     by_key = defaultdict(list)
     for r in records:
         by_key[(r["family_id"], r["trajectory_id"])].append(r)
+    arm_of = {}
+    for r in records:
+        arm_of[r["trajectory_id"]] = r["arm"]
     taus = []
     for _ in range(n_boot):
         fam_counts = defaultdict(int)
@@ -124,15 +127,36 @@ def crossed_bootstrap_taus(records: list, arm_a: str, arm_b: str,
         traj_counts = defaultdict(int)
         for _ in trajs:
             traj_counts[rng.choice(trajs)] += 1
-        sample = []
-        for (fam, traj), rs in by_key.items():
-            mult = fam_counts[fam] * traj_counts[traj]
-            if mult:
-                sample.extend(rs * mult)
-        try:
-            taus.append(contrast_tau(sample, arm_a, arm_b))
-        except AnalysisError:
+        # shadow-audit r1 P0-3 fix: trajectory resample WEIGHTS must survive
+        # aggregation. Per-trajectory means are recomputed on family-resampled
+        # records, then averaged across trajectories WEIGHTED by traj_counts —
+        # a trajectory drawn 5x contributes 5x, not merely "present".
+        traj_mean = {}
+        for traj in trajs:
+            if traj_counts[traj] == 0:
+                continue
+            num = den = 0.0
+            for fam in families:
+                w = fam_counts[fam]
+                if w == 0:
+                    continue
+                rs = by_key.get((fam, traj))
+                if rs:
+                    num += w * sum(r["loss"] for r in rs)
+                    den += w * len(rs)
+            if den > 0:
+                traj_mean[traj] = num / den
+        def arm_mean(arm):
+            num = den = 0.0
+            for traj, m in traj_mean.items():
+                if arm_of[traj] == arm:
+                    num += traj_counts[traj] * m
+                    den += traj_counts[traj]
+            return num / den if den else None
+        ma, mb = arm_mean(arm_a), arm_mean(arm_b)
+        if ma is None or mb is None:
             continue        # a resample may drop an arm entirely; skip, do not fabricate
+        taus.append(ma - mb)
     if len(taus) < max(50, n_boot // 2):
         raise AnalysisError(f"bootstrap degenerate: only {len(taus)}/{n_boot} valid resamples")
     return taus

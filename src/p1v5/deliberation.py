@@ -37,6 +37,9 @@ class CallReceipt:
     prompt_chars: int
     output_chars: int
     latency_ms: int
+    prompt_tokens: int = 0        # provider-billed actuals (0 for stub)
+    completion_tokens: int = 0
+    provider: str = ""            # which upstream served the call (routing receipt)
 
 
 @dataclass(frozen=True)
@@ -68,11 +71,14 @@ VOTE_RE = re.compile(r"FINAL:\s*(1(?:\.0+)?|0(?:\.\d+)?)\s*$", re.MULTILINE)
 
 
 def parse_probability(text: str) -> Optional[float]:
-    m = VOTE_RE.search(text or "")
-    if not m:
+    """shadow-audit r1 P0-4 fix: the LAST well-formed FINAL line is the vote —
+    a model that states a tentative figure and then revises must be scored on
+    its revision, not its draft."""
+    ms = VOTE_RE.findall(text or "")
+    if not ms:
         return None
     try:
-        q = float(m.group(1))
+        q = float(ms[-1])
     except ValueError:
         return None
     return q if 0.0 <= q <= 1.0 else None
@@ -125,12 +131,19 @@ class OpenRouterBackend:
         t0 = time.monotonic()
         with urllib.request.urlopen(req, timeout=120) as resp:
             out = json.loads(resp.read())
-        text = out["choices"][0]["message"]["content"]
+        # providers occasionally return content=None (empty/refusal/reasoning-only);
+        # that is a typed empty output, NOT a crash — parse_probability(None-safe "")
+        # will yield no vote and the scoring fallback handles it honestly
+        text = out["choices"][0]["message"].get("content") or ""
+        usage = out.get("usage") or {}
         receipt = CallReceipt(self.name, model, purpose,
                               hashlib.sha256(prompt.encode()).hexdigest(),
                               hashlib.sha256(text.encode()).hexdigest(),
                               len(prompt), len(text),
-                              int((time.monotonic() - t0) * 1000))
+                              int((time.monotonic() - t0) * 1000),
+                              usage.get("prompt_tokens", 0),
+                              usage.get("completion_tokens", 0),
+                              out.get("provider", ""))
         return text, receipt
 
 
