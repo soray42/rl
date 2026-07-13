@@ -18,7 +18,7 @@ LOCK_PATH = ROOT / "locks/artifact.lock.json"
 # excluded, so producing evidence never invalidates the lock it must bind to —
 # the round-9 self-reference loop is structurally gone. Evidence integrity is
 # instead recorded in the release attestation (gate_runner --release).
-INVENTORY_EXCLUDE = ("build/", "locks/", "evidence/", "__pycache__",
+INVENTORY_EXCLUDE = ("build/", "locks/", "evidence/", "data/", "__pycache__",
                      ".pytest_cache", ".git")
 
 CANONICAL_GATES = ["G9a", "G0", "G1", "G2", "G3", "G4", "G5a", "G5b", "G6",
