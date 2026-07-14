@@ -24,6 +24,50 @@ from p1v5.collector import DATA, PAGE_LIMIT, _archive, _get, two_clock_view  # n
 ELIGIBILITY_LINE = "2026-04-24"      # deepseek-v4-flash release date (conservative cutoff)
 
 
+def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000) -> tuple:
+    """Cursor pagination via the API's own deep-pagination endpoint (the 422
+    error body's recommendation; shadow r1 P0-1 follow-up: day windows ALSO
+    capped, keyset is the only complete channel). Returns (records, complete)."""
+    import hashlib as _h
+    out, cursor, seen_pages = [], None, set()
+    for page in range(max_pages):
+        params = dict(base_params, limit=PAGE_LIMIT)
+        try:
+            # cursor appended RAW: urlencode round-trip broke server-side cursor
+            # decoding (2026-07-14 loop incident: 4,150 pages, 22 unique)
+            from p1v5.collector import GAMMA, USER_AGENT, _last_call, RATE_SECONDS
+            import urllib.parse, urllib.request, time as _t
+            wait = RATE_SECONDS - (_t.monotonic() - _last_call[0])
+            if wait > 0:
+                _t.sleep(wait)
+            url = f"{GAMMA}{path}/keyset?{urllib.parse.urlencode(params)}"
+            if cursor:
+                url += f"&cursor={cursor}"
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+            _last_call[0] = _t.monotonic()
+        except Exception as exc:
+            print(f"    keyset page {page} error ({exc}); stopping INCOMPLETE", flush=True)
+            return out, False
+        sha = _h.sha256(raw).hexdigest()
+        if sha in seen_pages:            # loop breaker: identical page => cursor dead
+            print(f"    keyset page {page}: CURSOR LOOP detected, stopping INCOMPLETE", flush=True)
+            return out, False
+        seen_pages.add(sha)
+        _archive(kind, url, raw)
+        doc = json.loads(raw)
+        batch = doc.get("markets") or doc.get("events") or doc.get("data") or []
+        out.extend(batch)
+        cursor = doc.get("next_cursor")
+        if page % 100 == 0:
+            print(f"    keyset page {page}: cum {len(out)}", flush=True)
+        if not cursor or not batch:
+            return out, True
+    print("    keyset max_pages exhausted: INCOMPLETE", flush=True)
+    return out, False
+
+
 def fetch_all(path: str, base_params: dict, kind: str, max_pages: int = 22) -> tuple:
     """shadow-audit r1 P0-1 fix: returns (records, hit_cap). hit_cap=True means
     the LAST page was still full — the window may be truncated and the caller
@@ -76,44 +120,32 @@ def main() -> dict:
     tags, _tcap = fetch_all("/tags", {}, "gamma_tags", max_pages=10)
     print(f"tags: {len(tags)}", flush=True)
 
-    markets, seen_ids, truncated = [], set(), []
-    for lo, hi in week_windows(ELIGIBILITY_LINE, today):
-        batch, cap = fetch_all("/markets", {"closed": "true", "end_date_min": lo,
-                                            "end_date_max": hi}, "gamma_markets")
-        if cap:   # week too dense: descend to day windows (loud, never silent)
-            print(f"  CAP HIT {lo}..{hi}: splitting into day windows", flush=True)
-            batch = []
-            for dlo, dhi in day_windows(lo, hi):
-                db, dcap = fetch_all("/markets", {"closed": "true", "end_date_min": dlo,
-                                                  "end_date_max": dhi}, "gamma_markets")
-                batch.extend(db)
-                if dcap:
-                    truncated.append(f"{dlo}..{dhi}")
-                    print(f"    STILL CAPPED at day window {dlo}: recorded as known-incomplete", flush=True)
-        fresh = [m for m in batch if str(m.get("id")) not in seen_ids]
-        seen_ids.update(str(m.get("id")) for m in fresh)
-        markets.extend(fresh)
-        print(f"closed window {lo}..{hi}: +{len(fresh)} (cum {len(markets)})", flush=True)
-    active, acap = fetch_all("/markets", {"closed": "false", "order": "volume24hr",
-                                          "ascending": "false"}, "gamma_markets")
-    if acap:
-        truncated.append("active-channel")
-        print("  ACTIVE channel capped: recorded as known-incomplete", flush=True)
+    truncated = []
+    markets, complete = fetch_keyset("/markets", {"closed": "true",
+                                                  "end_date_min": ELIGIBILITY_LINE},
+                                     "gamma_markets")
+    if not complete:
+        truncated.append("closed-keyset-incomplete")
+    seen_ids = {str(m.get("id")) for m in markets}
+    print(f"closed keyset: {len(markets)} markets (complete={complete})", flush=True)
+    active, acomplete = fetch_keyset("/markets", {"closed": "false"}, "gamma_markets")
+    if not acomplete:
+        truncated.append("active-keyset-incomplete")
     fresh_active = [m for m in active if str(m.get("id")) not in seen_ids]
-    print(f"active: +{len(fresh_active)}", flush=True)
+    print(f"active keyset: +{len(fresh_active)} (complete={acomplete})", flush=True)
 
     events = []
     try:
-        for lo, hi in week_windows(ELIGIBILITY_LINE, today):
-            eb, ecap = fetch_all("/events", {"closed": "true", "end_date_min": lo,
-                                             "end_date_max": hi}, "gamma_events")
-            events.extend(eb)
-            if ecap:
-                truncated.append(f"events:{lo}")
-        eb, ecap = fetch_all("/events", {"closed": "false"}, "gamma_events")
+        eb, ecomplete = fetch_keyset("/events", {"closed": "true",
+                                                 "end_date_min": ELIGIBILITY_LINE},
+                                     "gamma_events")
         events.extend(eb)
-        if ecap:
-            truncated.append("events:active")
+        if not ecomplete:
+            truncated.append("events-closed-keyset-incomplete")
+        eb, ecomplete = fetch_keyset("/events", {"closed": "false"}, "gamma_events")
+        events.extend(eb)
+        if not ecomplete:
+            truncated.append("events-active-keyset-incomplete")
         print(f"events: {len(events)}", flush=True)
     except Exception as exc:
         print(f"events channel failed ({exc}); market-embedded event ids still available", flush=True)

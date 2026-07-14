@@ -27,7 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data"
 GAMMA = "https://gamma-api.polymarket.com"
-RATE_SECONDS = 1.0          # polite: ~1 req/s, far under any documented limit
+RATE_SECONDS = 1.0          # steady-state polite limit; bulk pulls may lower temporarily
 PAGE_LIMIT = 100            # documented maximum
 OFFSET_WALL = 2000          # recon: deeper offsets 422; paginate by date windows instead
 USER_AGENT = "p1v5-academic-collector/0.1 (individual academic research; contact: sora.yng42@gmail.com)"

@@ -33,7 +33,7 @@ CATS = ["macro_indicators", "monetary_policy", "geopolitics", "elections_politic
         "financial_markets", "crypto", "tech_business", "sports_esports",
         "entertainment_culture", "science_weather", "other"]
 ELIGIBLE = set(CATS[:5])
-BATCH = 25
+BATCH = 40
 COST_CAP_USD = 1.0
 PRICE_IN, PRICE_OUT = 0.09, 0.18
 
@@ -74,32 +74,60 @@ def main() -> dict:
     reg = sorted(views.glob("event_registry_*.jsonl"))[-1]
     rows = [json.loads(l) for l in open(reg)]
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
-    backend = OpenRouterBackend(MODEL)
+    backend = OpenRouterBackend(MODEL, provider_pin=None)  # 分类≠实验:解钉换吞吐
 
-    todo = [(idx, r["title"] or r["series_key"]) for idx, r in enumerate(rows)]
-    labels, spent, receipts = {}, 0.0, 0
+    ckpt_path = views / "llm_topics_checkpoint.jsonl"
+    done_ids = {}
+    if ckpt_path.exists():
+        for line in open(ckpt_path):
+            o = json.loads(line)
+            done_ids[o["event_id"]] = o["c"]
+        print(f"resume: {len(done_ids)} labels from checkpoint", flush=True)
+    todo = [(idx, r["title"] or r["series_key"]) for idx, r in enumerate(rows)
+            if r["event_id"] not in done_ids]
+    labels = {idx: done_ids[r["event_id"]] for idx, r in enumerate(rows)
+              if r["event_id"] in done_ids}
+    spent, receipts = 0.0, 0
+    ckpt_f = open(ckpt_path, "a")
+
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    lock = threading.Lock()
 
     def run_batch(batch, seed):
         nonlocal spent, receipts
         prompt = build_prompt(batch)
         text, rec = backend.complete(prompt, seed=seed, purpose="topic_classify")
-        receipts += 1
-        spent_now = (rec.prompt_tokens * PRICE_IN + rec.completion_tokens * PRICE_OUT) / 1e6
-        spent += spent_now
-        if spent > COST_CAP_USD:
-            raise SystemExit(f"classification cost cap ${COST_CAP_USD} hit")
+        with lock:
+            receipts += 1
+            spent += (rec.prompt_tokens * PRICE_IN + rec.completion_tokens * PRICE_OUT) / 1e6
+            if spent > COST_CAP_USD:
+                raise SystemExit(f"classification cost cap ${COST_CAP_USD} hit")
         return parse_reply(text, {i for i, _ in batch})
 
-    for b0 in range(0, len(todo), BATCH):
+    def worker(b0):
         batch = todo[b0:b0 + BATCH]
-        got = run_batch(batch, seed=9000 + b0)
-        missing = [it for it in batch if it[0] not in got]
-        if missing:                      # one retry at half size
-            for h0 in range(0, len(missing), max(1, BATCH // 2)):
-                got.update(run_batch(missing[h0:h0 + BATCH // 2], seed=9500 + b0 + h0))
-        labels.update(got)
-        if (b0 // BATCH) % 20 == 0:
-            print(f"batch {b0 // BATCH}: labeled {len(labels)}/{len(todo)} spent=${spent:.3f}", flush=True)
+        try:
+            got = run_batch(batch, seed=9000 + b0)
+            missing = [it for it in batch if it[0] not in got]
+            if missing:
+                for h0 in range(0, len(missing), max(1, BATCH // 2)):
+                    got.update(run_batch(missing[h0:h0 + BATCH // 2], seed=9500 + b0 + h0))
+        except SystemExit:
+            raise
+        except Exception as exc:
+            print(f"  batch@{b0} failed: {exc}", flush=True)
+            return
+        with lock:
+            labels.update(got)
+            for i, cat in got.items():
+                ckpt_f.write(json.dumps({"event_id": rows[i]["event_id"], "c": cat}) + "\n")
+            ckpt_f.flush()
+            if (b0 // BATCH) % 20 == 0:
+                print(f"batch {b0 // BATCH}: labeled {len(labels)} spent=${spent:.3f}", flush=True)
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(worker, range(0, len(todo), BATCH)))
 
     out_rows, audit = [], {"rescued_from_unclassified": [], "false_exclusion_candidates": [],
                            "eligible_downgraded": []}
