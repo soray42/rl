@@ -86,8 +86,8 @@ def contrast_tau(records: list, arm_a: str, arm_b: str) -> float:
 # small-cluster floor (MacKinnon-Nielsen-Webb discipline, cited by audits r5/r8):
 # below these counts the percentile bootstrap is anti-conservative and can turn
 # noise into "significant" directional claims — refuse rather than fabricate.
-MIN_FAMILIES = 5
-MIN_TRAJ_PER_ARM = 4
+MIN_FAMILIES = 8   # shadow r2: coverage at 5 still ~2x nominal; floor raised, real guarantee = G6 at design point
+MIN_TRAJ_PER_ARM = 6
 
 
 def _guard_cluster_sizes(records: list, arm_a: str, arm_b: str):

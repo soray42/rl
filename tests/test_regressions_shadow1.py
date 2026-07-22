@@ -25,11 +25,11 @@ class TestBootstrapTrajectoryWeight(unittest.TestCase):
         # trajectory-dominant DGP: identical families, spread trajectory means.
         # v5.4 bug: dict-collapse discarded traj weights -> tau variance ~= 0.
         records = []
-        means = {"diff_agent_credit": [0.10, 0.20, 0.30, 0.40],
-                 "shared_surplus": [0.15, 0.25, 0.35, 0.45]}
+        means = {"diff_agent_credit": [0.10, 0.18, 0.26, 0.34, 0.42, 0.50],
+                 "shared_surplus": [0.14, 0.22, 0.30, 0.38, 0.46, 0.54]}
         for arm, ms in means.items():
             for ti, m in enumerate(ms):
-                for f in range(5):
+                for f in range(8):
                     for k in range(2):
                         records.append({"trajectory_id": f"{arm}-t{ti}",
                                         "arm": arm, "family_id": f"fam-{f}",

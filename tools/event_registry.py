@@ -80,6 +80,12 @@ def topic_class(tags):
 def main() -> dict:
     views = ROOT / "data/views"
     mfile = sorted(views.glob("full_*_markets.jsonl"))[-1]
+    import os
+    n_lines = sum(1 for _ in open(mfile))
+    if n_lines < 10000 and not os.environ.get("P1V5_ALLOW_SMALL_PULL"):
+        # shadow r2 P0: ghost-input guard — never silently build from a failed pull
+        raise SystemExit(f"REFUSING ghost input {mfile.name} ({n_lines} markets < 10k); "
+                         f"set P1V5_ALLOW_SMALL_PULL=1 to override")
     efile = sorted(views.glob("full_*_events.jsonl"))[-1]
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
 

@@ -71,7 +71,7 @@ def main() -> dict:
     per_week = defaultdict(int)
     for r in eligible_events:
         if r["last_close"]:
-            wk = datetime.date.fromtimestamp(r["last_close"]).isocalendar()
+            wk = datetime.datetime.fromtimestamp(r["last_close"], datetime.timezone.utc).date().isocalendar()
             per_week[f"{wk[0]}-W{wk[1]:02d}"] += 1
     recent = dict(sorted(per_week.items())[-12:])
     weekly_vals = [v for k, v in sorted(per_week.items()) if k >= "2026-W17"]

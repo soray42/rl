@@ -38,34 +38,29 @@ COST_CAP_USD = 1.0
 PRICE_IN, PRICE_OUT = 0.09, 0.18
 
 
+LETTER = {c: chr(97 + i) for i, c in enumerate(CATS)}     # a..k
+UNLETTER = {v: k for k, v in LETTER.items()}
+
+
 def build_prompt(items: list) -> str:
     lines = "\n".join(f"{i}: {t[:110]}" for i, t in items)
+    legend = ", ".join(f"{LETTER[c]}={c}" for c in CATS)
     return (
-        "Classify each prediction-market event title into EXACTLY one category:\n"
-        + ", ".join(CATS) + ".\n"
-        "Rules: economic data releases (CPI, jobs, unemployment, GDP) -> macro_indicators; "
-        "central banks/rates -> monetary_policy; wars, treaties, diplomacy, regime change -> geopolitics; "
-        "elections, appointments, legislation, government officials -> elections_politics; "
-        "stock/commodity/index/company-valuation prices -> financial_markets; "
-        "cryptocurrency prices/airdrops/tokens -> crypto; AI models, product launches, "
-        "company rankings -> tech_business.\n"
-        "Output ONLY a JSON array, one object per line item: "
-        '[{"i": <number>, "c": "<category>"}]\n\n' + lines)
+        "Classify each prediction-market event title into EXACTLY one category letter.\n"
+        f"Legend: {legend}.\n"
+        "Hints: econ data releases=a; central banks/rates=b; wars/diplomacy/regime=c; "
+        "elections/officials/legislation=d; stock/commodity/index prices=e; crypto=f; "
+        "AI/products/company rankings=g; sports=h; entertainment=i; weather/science=j; other=k.\n"
+        "Output ONLY lines of the form `<number>:<letter>`, one per item, nothing else.\n\n"
+        + lines)
 
 
 def parse_reply(text: str, expect: set) -> dict:
-    m = re.search(r"\[.*\]", text or "", re.S)
-    if not m:
-        return {}
-    try:
-        arr = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return {}
     out = {}
-    for o in arr:
-        if (isinstance(o, dict) and o.get("i") in expect
-                and o.get("c") in CATS):
-            out[o["i"]] = o["c"]
+    for m in re.finditer(r"^\s*(\d+)\s*[:=]\s*([a-k])\b", text or "", re.M):
+        i, letter = int(m.group(1)), m.group(2)
+        if i in expect:
+            out[i] = UNLETTER[letter]
     return out
 
 

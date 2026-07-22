@@ -97,14 +97,14 @@ class TestPlantedDecisions(unittest.TestCase):
             analyze_coprimary(recs, delta=0.005, n_boot=400, seed=13)
 
     def test_null_with_tiny_delta_is_inconclusive(self):
-        recs = synth_records(effect_c1=0.0, effect_c2=0.0, n_fam=6, k_per_arm=4,
+        recs = synth_records(effect_c1=0.0, effect_c2=0.0, n_fam=10, k_per_arm=6,
                              fam_sd=0.03, noise_sd=0.02)
         out = analyze_coprimary(recs, delta=0.0005, n_boot=400, seed=13)
         self.assertIn(out["C1"]["decision"], ("inconclusive",), out["C1"])
 
     def test_directional_claim_requires_holm(self):
-        recs = synth_records(effect_c1=-0.015, effect_c2=0.015, n_fam=6,
-                             k_per_arm=4, fam_sd=0.04, noise_sd=0.03)
+        recs = synth_records(effect_c1=-0.015, effect_c2=0.015, n_fam=10,
+                             k_per_arm=6, fam_sd=0.04, noise_sd=0.03)
         out = analyze_coprimary(recs, delta=0.001, n_boot=400, seed=14)
         for cid in ("C1", "C2"):
             if out[cid]["decision"] in ("meaningful_benefit", "meaningful_harm"):

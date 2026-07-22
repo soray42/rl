@@ -120,19 +120,51 @@ def main() -> dict:
     tags, _tcap = fetch_all("/tags", {}, "gamma_tags", max_pages=10)
     print(f"tags: {len(tags)}", flush=True)
 
+    # shadow r2 P0 fix: day-window implementation RESTORED as the primary channel
+    # (it produced the good 171,505-market dataset); keyset is opt-in experimental
+    # (--keyset) until its cursor semantics are actually solved.
+    import sys as _s
+    use_keyset = "--keyset" in _s.argv
     truncated = []
-    markets, complete = fetch_keyset("/markets", {"closed": "true",
-                                                  "end_date_min": ELIGIBILITY_LINE},
-                                     "gamma_markets")
-    if not complete:
-        truncated.append("closed-keyset-incomplete")
-    seen_ids = {str(m.get("id")) for m in markets}
-    print(f"closed keyset: {len(markets)} markets (complete={complete})", flush=True)
-    active, acomplete = fetch_keyset("/markets", {"closed": "false"}, "gamma_markets")
-    if not acomplete:
-        truncated.append("active-keyset-incomplete")
+    markets, seen_ids = [], set()
+    if use_keyset:
+        markets, complete = fetch_keyset("/markets", {"closed": "true",
+                                                      "end_date_min": ELIGIBILITY_LINE},
+                                         "gamma_markets")
+        if not complete:
+            truncated.append("closed-keyset-incomplete")
+        seen_ids = {str(m.get("id")) for m in markets}
+    else:
+        for lo, hi in week_windows(ELIGIBILITY_LINE, today):
+            batch, cap = fetch_all("/markets", {"closed": "true", "end_date_min": lo,
+                                                "end_date_max": hi}, "gamma_markets")
+            if cap:
+                print(f"  CAP HIT {lo}..{hi}: splitting into day windows", flush=True)
+                batch = []
+                for dlo, dhi in day_windows(lo, hi):
+                    db, dcap = fetch_all("/markets", {"closed": "true",
+                                                      "end_date_min": dlo,
+                                                      "end_date_max": dhi}, "gamma_markets")
+                    batch.extend(db)
+                    if dcap:
+                        truncated.append(f"{dlo}..{dhi}")
+            fresh = [m for m in batch if str(m.get("id")) not in seen_ids]
+            seen_ids.update(str(m.get("id")) for m in fresh)
+            markets.extend(fresh)
+            print(f"closed window {lo}..{hi}: +{len(fresh)} (cum {len(markets)})", flush=True)
+    active, acap = fetch_all("/markets", {"closed": "false", "order": "volume24hr",
+                                          "ascending": "false"}, "gamma_markets")
+    if acap:
+        truncated.append("active-channel-capped")
     fresh_active = [m for m in active if str(m.get("id")) not in seen_ids]
-    print(f"active keyset: +{len(fresh_active)} (complete={acomplete})", flush=True)
+    print(f"active: +{len(fresh_active)}", flush=True)
+    # shadow r2 P0: refuse to WRITE a ghost dataset silently
+    if len(markets) < 10000:
+        print(f"SANITY REFUSAL: only {len(markets)} closed markets collected "
+              f"(expected >=10k in-window); NOT writing views. Set P1V5_ALLOW_SMALL_PULL=1 to override.", flush=True)
+        import os as _o
+        if not _o.environ.get("P1V5_ALLOW_SMALL_PULL"):
+            raise SystemExit(3)
 
     events = []
     try:
