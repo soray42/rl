@@ -18,7 +18,7 @@ from p1v5.checks import CANONICAL_ARMS  # noqa: E402
 
 def synth_records(effect_c1: float, effect_c2: float, n_fam: int = 12,
                   k_per_arm: int = 6, seed: int = 7, fam_sd: float = 0.02,
-                  noise_sd: float = 0.01) -> list:
+                  noise_sd: float = 0.01, with_ledgers: bool = False):
     """Planted DGP with family common shocks (round-8 A14 style) and arm effects
     expressed on diff/c3 relative to their contrast partners."""
     rng = random.Random(seed)
@@ -37,6 +37,9 @@ def synth_records(effect_c1: float, effect_c2: float, n_fam: int = 12,
                 records.append({"trajectory_id": entry["trajectory_id"],
                                 "arm": entry["arm"], "family_id": fam,
                                 "market_id": f"{fam}-m{mkt}", "loss": loss})
+    if with_ledgers:
+        enrollment = [f"fam-{i}-m{k}" for i in range(n_fam) for k in range(2)]
+        return records, ledger, enrollment
     return records
 
 
@@ -77,38 +80,53 @@ class TestEstimator(unittest.TestCase):
 
 class TestPlantedDecisions(unittest.TestCase):
     def test_planted_benefit_detected(self):
-        recs = synth_records(effect_c1=-0.06, effect_c2=0.0)
-        out = analyze_coprimary(recs, delta=0.02, n_boot=400, seed=11)
+        recs, led, enr = synth_records(effect_c1=-0.06, effect_c2=0.0, with_ledgers=True)
+        out = analyze_coprimary(recs, delta=0.02, n_boot=400, seed=11, assignment_ledger=led, enrollment=enr)
         self.assertEqual(out["C1"]["decision"], "meaningful_benefit", out["C1"])
         self.assertLess(out["C1"]["tau_hat"], -0.04)
 
     def test_planted_null_with_generous_delta_is_equivalence(self):
-        recs = synth_records(effect_c1=0.0, effect_c2=0.0, n_fam=16, k_per_arm=8)
-        out = analyze_coprimary(recs, delta=0.05, n_boot=400, seed=12)
+        recs, led, enr = synth_records(effect_c1=0.0, effect_c2=0.0, n_fam=16, k_per_arm=8, with_ledgers=True)
+        out = analyze_coprimary(recs, delta=0.05, n_boot=400, seed=12, assignment_ledger=led, enrollment=enr)
         self.assertEqual(out["C1"]["decision"], "practical_equivalence", out["C1"])
         self.assertEqual(out["C2"]["decision"], "practical_equivalence", out["C2"])
 
     def test_small_cluster_regime_refused_not_fabricated(self):
         # with 2 traj/arm + heavy noise the bootstrap turned noise into
         # "significant" directions (observed live) — the guard must REFUSE
-        recs = synth_records(effect_c1=0.0, effect_c2=0.0, n_fam=3, k_per_arm=2,
-                             fam_sd=0.06, noise_sd=0.04)
+        recs, led, enr = synth_records(effect_c1=0.0, effect_c2=0.0, n_fam=3, k_per_arm=2,
+                             fam_sd=0.06, noise_sd=0.04, with_ledgers=True)
         with self.assertRaises(AnalysisError):
-            analyze_coprimary(recs, delta=0.005, n_boot=400, seed=13)
+            analyze_coprimary(recs, delta=0.005, n_boot=400, seed=13, assignment_ledger=led, enrollment=enr)
 
     def test_null_with_tiny_delta_is_inconclusive(self):
-        recs = synth_records(effect_c1=0.0, effect_c2=0.0, n_fam=10, k_per_arm=6,
-                             fam_sd=0.03, noise_sd=0.02)
-        out = analyze_coprimary(recs, delta=0.0005, n_boot=400, seed=13)
+        recs, led, enr = synth_records(effect_c1=0.0, effect_c2=0.0, n_fam=10, k_per_arm=6,
+                             fam_sd=0.03, noise_sd=0.02, with_ledgers=True)
+        out = analyze_coprimary(recs, delta=0.0005, n_boot=400, seed=13, assignment_ledger=led, enrollment=enr)
         self.assertIn(out["C1"]["decision"], ("inconclusive",), out["C1"])
 
+    def test_itt_deletion_raises(self):
+        # r11 reproduce case: deleting a randomized trajectory's rows must RAISE
+        recs, led, enr = synth_records(effect_c1=0.0, effect_c2=0.0, n_fam=10,
+                                       k_per_arm=6, with_ledgers=True)
+        victim = next(e["trajectory_id"] for e in led if e["arm"] == "diff_agent_credit")
+        pruned = [r for r in recs if r["trajectory_id"] != victim]
+        with self.assertRaises(AnalysisError):
+            analyze_coprimary(pruned, delta=0.02, n_boot=200, seed=9,
+                              assignment_ledger=led, enrollment=enr)
+        # deleting a single market row must also raise
+        one_gone = recs[1:]
+        with self.assertRaises(AnalysisError):
+            analyze_coprimary(one_gone, delta=0.02, n_boot=200, seed=9,
+                              assignment_ledger=led, enrollment=enr)
+
     def test_directional_claim_requires_holm(self):
-        recs = synth_records(effect_c1=-0.015, effect_c2=0.015, n_fam=10,
-                             k_per_arm=6, fam_sd=0.04, noise_sd=0.03)
-        out = analyze_coprimary(recs, delta=0.001, n_boot=400, seed=14)
+        recs, led, enr = synth_records(effect_c1=-0.015, effect_c2=0.015, n_fam=10,
+                             k_per_arm=6, fam_sd=0.04, noise_sd=0.03, with_ledgers=True)
+        out = analyze_coprimary(recs, delta=0.001, n_boot=400, seed=14, assignment_ledger=led, enrollment=enr)
         for cid in ("C1", "C2"):
-            if out[cid]["decision"] in ("meaningful_benefit", "meaningful_harm"):
-                self.assertTrue(out[cid]["holm_reject_null"], out[cid])
+            self.assertEqual(out[cid]["multiplicity"], "bonferroni_simultaneous")
+            self.assertAlmostEqual(out[cid]["ci_level"], 0.975)
 
 
 if __name__ == "__main__":

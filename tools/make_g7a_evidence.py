@@ -7,7 +7,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from p1v5.checks import LOCK_PATH
 from p1v5.config import manifest_sha256
 
-r = json.load(open(ROOT / "build/micro_pilot_live.json"))
+SRC = ROOT / "evidence_src/micro_pilot_live.json"
+PRC = ROOT / "evidence_src/pricing_v1.json"
+r = json.load(open(SRC))
 est, act = r["est_total_cost_usd"], r["billed_cost_usd"]
 err_pct = abs(est - act) / act * 100
 evidence = {
@@ -18,7 +20,9 @@ evidence = {
     "inputs": {"manifest_sha256": manifest_sha256(),
                "input_lock_sha256": hashlib.sha256(LOCK_PATH.read_bytes()).hexdigest()},
     "metrics": {"cost_usd_estimate": est, "cost_error_pct": round(err_pct, 2),
-                "n_dry_run_events": r["n_questions"]},
+                "n_dry_run_events": r["n_questions"],
+                "source_report_sha256": hashlib.sha256(SRC.read_bytes()).hexdigest(),
+                "pricing_table_sha256": hashlib.sha256(PRC.read_bytes()).hexdigest()},
     "verdict": "PASS" if (err_pct <= 20 and r["n_questions"] >= 5) else "FAIL",
 }
 out = ROOT / "evidence/g7a_cost_micropilot.json"

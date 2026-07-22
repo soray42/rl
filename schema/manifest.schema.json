@@ -298,7 +298,7 @@
               "const": "two_sided"
             },
             "multiplicity": {
-              "const": "holm_over_2_coprimary"
+              "const": "bonferroni_simultaneous_over_2_coprimary"
             },
             "orientation": {
               "type": "string",

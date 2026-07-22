@@ -84,11 +84,12 @@ estimand:
       arm_b: c3_compute_matched_sham
       id: C2
     coprimary_success_rule: each contrast is independently reportable; paper headline
-      requires at least one four-way branch other than inconclusive under Holm-adjusted
+      requires at least one four-way branch other than inconclusive under Bonferroni-simultaneous
       intervals
-    estimator: trajectory-level mean difference; variance by cluster bootstrap over
-      event_family x trajectory (crossed); adjusted CIs per Holm
-    multiplicity: holm_over_2_coprimary
+    estimator: trajectory-level mean difference; crossed bootstrap resampling families
+      and (arm-stratified) trajectories; Bonferroni simultaneous percentile CIs at
+      1-alpha/2 drive the four-way decisions; unadjusted p descriptive only
+    multiplicity: bonferroni_simultaneous_over_2_coprimary
     orientation: tau = mean_brier(arm_a) - mean_brier(arm_b); negative tau favors
       arm_a
     sidedness: two_sided
@@ -104,8 +105,8 @@ estimand:
     - practical_equivalence
     - meaningful_harm
     - inconclusive
-    equivalence_requires: Holm-adjusted CI fully inside [-delta, +delta]; p>0.05 never
-      treated as equivalence
+    equivalence_requires: Bonferroni-simultaneous CI fully inside [-delta, +delta];
+      p>0.05 never treated as equivalence
     harm_mechanism_note: harm identifies frozen-policy relative harm only; credit-contamination
       interpretation requires common updater + compute-matched sham + placebo suite
       + mediator diagnostics jointly
@@ -221,7 +222,7 @@ gates:
   - LOCK
   id: FREEZE
   predicate: check_freeze_preconditions
-manifest_version: 5.3.1
+manifest_version: 5.5.0
 memory_policy_common:
   admission_top_k: 8
   capacity_items: 64
@@ -252,8 +253,8 @@ meta:
   implementation_status_honest: runnable scaffold under repair contract E0-E12; NOT
     a freezable experiment system
   novelty_scope: to our knowledge, under the registered search protocol
-  supersedes: 'p1_v5 5.3.0 (round-10 BLOCK: canonical-path test landmine, evidence
-    semantics, DVM round paths)'
+  supersedes: 'p1_v5 5.3.1/5.4 line (round-11 E3/E4 BLOCK: 5 P0s incl. after_cursor,
+    closed!=settled, unledgered ITT, ephemeral transcripts, unbound G7a)'
 offline_analyses:
 - id: shapley_game
   reason_offline: trajectory budget reserved for H1 power

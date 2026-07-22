@@ -92,7 +92,7 @@ def main() -> dict:
     def run_batch(batch, seed):
         nonlocal spent, receipts
         prompt = build_prompt(batch)
-        text, rec = backend.complete(prompt, seed=seed, purpose="topic_classify")
+        text, rec = backend.complete(prompt, seed=seed, purpose="topic_classify", max_tokens=600)
         with lock:
             receipts += 1
             spent += (rec.prompt_tokens * PRICE_IN + rec.completion_tokens * PRICE_OUT) / 1e6

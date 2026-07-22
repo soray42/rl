@@ -1,0 +1,12 @@
+{
+  "deepseek/deepseek-v4-flash": {
+    "in_per_mtok": 0.09,
+    "out_per_mtok": 0.18
+  },
+  "source": "openrouter /models 2026-07-14 probe",
+  "stub-1": {
+    "in_per_mtok": 0.0,
+    "out_per_mtok": 0.0
+  },
+  "version": "pricing_v1"
+}

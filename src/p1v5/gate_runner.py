@@ -66,8 +66,11 @@ EVIDENCE_SCHEMAS = {
                             "replay_fidelity": _UNIT, "n_replayed": _POS_INT},
                            ["route_chosen", "replay_fidelity", "n_replayed"]),
     "G7a": _evidence_schema({"cost_usd_estimate": _POS_NUM, "cost_error_pct": {"type": "number", "minimum": 0, "maximum": 100},
-                             "n_dry_run_events": _POS_INT},
-                            ["cost_usd_estimate", "cost_error_pct", "n_dry_run_events"]),
+                             "n_dry_run_events": _POS_INT,
+                             "source_report_sha256": _HEX64,
+                             "pricing_table_sha256": _HEX64},
+                            ["cost_usd_estimate", "cost_error_pct", "n_dry_run_events",
+                             "source_report_sha256", "pricing_table_sha256"]),
     "G5a": _evidence_schema({"independent_family_transitions": _NONNEG_INT, "required_by_g6": _POS_INT},
                             ["independent_family_transitions", "required_by_g6"]),
     "G6": _evidence_schema({"type1_ucb": _UNIT, "power_lcb": _UNIT, "n_sims": _POS_INT,
@@ -188,6 +191,26 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
         return {"status": "FAIL", "reason": "evidence not bound to CURRENT manifest hash"}
     if e["inputs"]["input_lock_sha256"] != current_lock_sha:
         return {"status": "FAIL", "reason": "evidence not bound to CURRENT input lock hash"}
+    if gate["id"] == "G7a":
+        # R11-8: evidence must bind to a persisted source report; runner RECOMPUTES
+        src = ROOT / "evidence_src/micro_pilot_live.json"
+        prc = ROOT / "evidence_src/pricing_v1.json"
+        for p_, key in ((src, "source_report_sha256"), (prc, "pricing_table_sha256")):
+            if not p_.exists():
+                return {"status": "FAIL", "reason": f"G7a source artifact missing: {p_.name}"}
+            got = hashlib.sha256(p_.read_bytes()).hexdigest()
+            if e["metrics"][key] != got:
+                return {"status": "FAIL", "reason": f"G7a {key} != recomputed sha of {p_.name}"}
+        rep = json.loads(src.read_text())
+        est_r, act_r = rep.get("est_total_cost_usd"), rep.get("billed_cost_usd")
+        if not act_r:
+            return {"status": "FAIL", "reason": "G7a source report lacks billed cost"}
+        recomputed_err = abs(est_r - act_r) / act_r * 100
+        if abs(recomputed_err - e["metrics"]["cost_error_pct"]) > 0.05:
+            return {"status": "FAIL",
+                    "reason": f"G7a cost_error_pct {e['metrics']['cost_error_pct']} != recomputed {recomputed_err:.2f}"}
+        if rep.get("n_questions") != e["metrics"]["n_dry_run_events"]:
+            return {"status": "FAIL", "reason": "G7a n_dry_run_events != source report"}
     binding = HASH_BINDINGS.get(gate["id"])
     if binding is not None:
         key, target_rel = binding
@@ -293,8 +316,16 @@ def run(release: bool = False):
             "counts": n,
         }
         att_hash = _body_hash(attestation)
-        (build / "release_attestation.json").write_text(
-            json.dumps({"body": attestation, "body_sha256": att_hash}, indent=2))
+        att_doc = json.dumps({"body": attestation, "body_sha256": att_hash}, indent=2)
+        attempts_dir = build / "release_attempts"
+        attempts_dir.mkdir(exist_ok=True)
+        (attempts_dir / f"{att_hash}.json").write_text(att_doc)   # content-addressed, immutable
+        (build / "release_attestation.json").write_text(att_doc)
+        if success:
+            import tempfile as _tf
+            with _tf.NamedTemporaryFile("w", dir=str(build), delete=False) as tf:
+                tf.write(att_doc)
+            __import__("pathlib").Path(tf.name).replace(build / "latest_successful_release.json")
         with open(build / "release_attempts.log", "a") as f:
             f.write(f"{envelope['run_utc']} run_id={envelope['run_id']} "
                     f"success={success} attestation={att_hash}\n")
@@ -341,9 +372,9 @@ def verify_status_file() -> bool:
 
 
 def verify_release_attestation() -> bool:
-    """Read-only verifier (T10 P1): the published anchor must correspond to a
-    SUCCESSFUL release attestation whose self-hash matches."""
-    p = ROOT / "build/release_attestation.json"
+    """Read-only verifier: reads the durable latest_successful_release.json
+    (R11-10), immune to later failed attempts overwriting the working file."""
+    p = ROOT / "build/latest_successful_release.json"
     if not p.exists() or not ATTESTATION_ANCHOR_PATH.exists():
         return False
     doc = json.loads(p.read_text())

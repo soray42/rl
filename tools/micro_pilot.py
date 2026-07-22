@@ -35,8 +35,9 @@ def load_questions(n: int) -> list:
     if not views:
         raise SystemExit("no collected data; run collector first")
     qs, seen_events = [], set()
-    for line in views[-1].read_text().splitlines():
-        v = json.loads(line)
+    rows = [json.loads(l) for l in views[-1].read_text().splitlines()]
+    rows.sort(key=lambda v: v.get("closed_time") or 0)   # R11-9: real forecast-clock order
+    for v in rows:
         if (v["uma_status"] == "resolved" and v["outcome_gamma_coarse"] in ("yes", "no")
                 and not v["neg_risk"] and v["question"]):
             evs = set(v["event_ids"] or [v["market_id"]])
@@ -44,6 +45,7 @@ def load_questions(n: int) -> list:
                 continue
             seen_events.update(evs)
             qs.append({"question_id": v["market_id"], "question": v["question"],
+                       "closed_time": v.get("closed_time"),
                        "y": 1 if v["outcome_gamma_coarse"] == "yes" else 0})
         if len(qs) >= n:
             break
@@ -60,7 +62,10 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
     slices = [f"private evidence slice {i} (dev tier: question text only)"
               for i in range(n_agents)]
     report = {"mode": mode, "model": model, "n_questions": len(questions),
-              "arms": {}, "receipt_chars_total": 0}
+              "epistemic_status": "DEV_NONCAUSAL",   # R11-9: retrospective, never effect evidence
+              "arms": {}, "receipt_chars_total": 0, "transcript_bundles": {}}
+    tdir = ROOT / "data/transcripts" / datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
+    tdir.mkdir(parents=True, exist_ok=True)
     for arm in CANONICAL_ARMS:
         team = TeamDeliberation(backend, n_agents)
         memory = MemoryState()
@@ -69,6 +74,12 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
         for k, q in enumerate(questions):
             t = team.run(q, slices, memory, seed=1000 + k)
             forecasts[q["question_id"]] = t.final_q
+            bundle = t.to_bundle(meta={"arm": arm, "k": k, "mode": mode,
+                                       "closed_time": q.get("closed_time"),
+                                       "epistemic_status": "DEV_NONCAUSAL"})
+            bpath = tdir / f"{arm}_{q['question_id']}.json"
+            bpath.write_text(json.dumps(bundle, ensure_ascii=False, sort_keys=True))
+            report["transcript_bundles"][f"{arm}/{q['question_id']}"] = t.sha()
             y = q["y"]
             batch = f"{arm}-b{k}"
             if arm == "no_update":

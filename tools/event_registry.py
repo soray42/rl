@@ -79,14 +79,26 @@ def topic_class(tags):
 
 def main() -> dict:
     views = ROOT / "data/views"
-    mfile = sorted(views.glob("full_*_markets.jsonl"))[-1]
+    import os as _os
+    bm_path = _os.environ.get("P1V5_BATCH_MANIFEST")
+    if not bm_path:
+        raise SystemExit("R11-2: set P1V5_BATCH_MANIFEST=<path to batch_manifest_*.json>; "
+                         "implicit latest-file selection is forbidden")
+    bm = json.loads(open(bm_path).read())
+    mkey = next(k for k in bm["files"] if k.endswith("_markets.jsonl"))
+    ekey = next(k for k in bm["files"] if k.endswith("_events.jsonl"))
+    mfile = views / mkey
+    for key in (mkey, ekey):
+        got = __import__("hashlib").sha256(open(views / key, "rb").read()).hexdigest()
+        if got != bm["files"][key]:
+            raise SystemExit(f"R11-2: {key} sha mismatch vs batch manifest")
     import os
     n_lines = sum(1 for _ in open(mfile))
     if n_lines < 10000 and not os.environ.get("P1V5_ALLOW_SMALL_PULL"):
         # shadow r2 P0: ghost-input guard — never silently build from a failed pull
         raise SystemExit(f"REFUSING ghost input {mfile.name} ({n_lines} markets < 10k); "
                          f"set P1V5_ALLOW_SMALL_PULL=1 to override")
-    efile = sorted(views.glob("full_*_events.jsonl"))[-1]
+    efile = views / ekey
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
 
     ev_meta = {}
@@ -103,7 +115,11 @@ def main() -> dict:
     for eid, mkts in ev_markets.items():
         meta = ev_meta.get(eid, {})
         title = meta.get("title") or (mkts[0].get("question") or "")
-        settled = [m for m in mkts if m.get("closed_time")]
+        # R11-3: settlement REQUIRES uma resolution + a terminal outcome;
+        # closed_time alone is just trading close (collector contract L103-121)
+        settled = [m for m in mkts
+                   if m.get("uma_status") == "resolved"
+                   and m.get("outcome_gamma_coarse") in ("yes", "no", "unknown_50_50")]
         row = {
             "event_id": eid,
             "title": title,

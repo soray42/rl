@@ -25,69 +25,61 @@ ELIGIBILITY_LINE = "2026-04-24"      # deepseek-v4-flash release date (conservat
 
 
 def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000) -> tuple:
-    """Cursor pagination via the API's own deep-pagination endpoint (the 422
-    error body's recommendation; shadow r1 P0-1 follow-up: day windows ALSO
-    capped, keyset is the only complete channel). Returns (records, complete)."""
-    import hashlib as _h
-    out, cursor, seen_pages = [], None, set()
+    """R11-1: official contract — next page via AFTER_CURSOR, urlencoded like any
+    opaque query value. Page ledger records cursor/response SHAs and id ranges;
+    no-progress (repeat page SHA OR non-advancing ids OR non-advancing cursor)
+    fails closed. Returns (records, complete)."""
+    out, after, seen_pages, prev_cursor_sha, prev_max_id = [], None, set(), None, None
+    ledger_path = DATA / "keyset_page_ledger.jsonl"
     for page in range(max_pages):
         params = dict(base_params, limit=PAGE_LIMIT)
+        if after:
+            params["after_cursor"] = after          # official param name, urlencoded by _get
         try:
-            # cursor appended RAW: urlencode round-trip broke server-side cursor
-            # decoding (2026-07-14 loop incident: 4,150 pages, 22 unique)
-            from p1v5.collector import GAMMA, USER_AGENT, _last_call, RATE_SECONDS
-            import urllib.parse, urllib.request, time as _t
-            wait = RATE_SECONDS - (_t.monotonic() - _last_call[0])
-            if wait > 0:
-                _t.sleep(wait)
-            url = f"{GAMMA}{path}/keyset?{urllib.parse.urlencode(params)}"
-            if cursor:
-                url += f"&cursor={cursor}"
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                raw = resp.read()
-            _last_call[0] = _t.monotonic()
+            url, raw = _get(f"{path}/keyset", params)
         except Exception as exc:
-            print(f"    keyset page {page} error ({exc}); stopping INCOMPLETE", flush=True)
+            print(f"    keyset page {page} error ({exc}); INCOMPLETE", flush=True)
             return out, False
         sha = _h.sha256(raw).hexdigest()
-        if sha in seen_pages:            # loop breaker: identical page => cursor dead
-            print(f"    keyset page {page}: CURSOR LOOP detected, stopping INCOMPLETE", flush=True)
+        doc = json.loads(raw)
+        batch = doc.get("markets") or doc.get("events") or []
+        nxt = doc.get("next_cursor")
+        ids = [str(m.get("id")) for m in batch]
+        with open(ledger_path, "a") as lf:
+            lf.write(json.dumps({
+                "page": page, "kind": kind,
+                "incoming_cursor_sha": _h.sha256((after or "").encode()).hexdigest()[:16],
+                "next_cursor_sha": _h.sha256((nxt or "").encode()).hexdigest()[:16],
+                "response_sha": sha, "n": len(ids),
+                "first_id": ids[0] if ids else None, "last_id": ids[-1] if ids else None,
+            }) + "\n")
+        if sha in seen_pages:
+            print(f"    keyset page {page}: repeat response, INCOMPLETE", flush=True)
             return out, False
         seen_pages.add(sha)
+        cur_cursor_sha = _h.sha256((nxt or "").encode()).hexdigest()
+        if nxt and cur_cursor_sha == prev_cursor_sha:
+            print(f"    keyset page {page}: cursor not advancing, INCOMPLETE", flush=True)
+            return out, False
+        prev_cursor_sha = cur_cursor_sha
+        try:
+            cur_max = max(int(i) for i in ids) if ids else None
+        except ValueError:
+            cur_max = None
+        if cur_max is not None and prev_max_id is not None and cur_max <= prev_max_id:
+            print(f"    keyset page {page}: ids not advancing, INCOMPLETE", flush=True)
+            return out, False
+        if cur_max is not None:
+            prev_max_id = cur_max
         _archive(kind, url, raw)
-        doc = json.loads(raw)
-        batch = doc.get("markets") or doc.get("events") or doc.get("data") or []
         out.extend(batch)
-        cursor = doc.get("next_cursor")
         if page % 100 == 0:
             print(f"    keyset page {page}: cum {len(out)}", flush=True)
-        if not cursor or not batch:
+        if not nxt or not batch:
             return out, True
+        after = nxt
     print("    keyset max_pages exhausted: INCOMPLETE", flush=True)
     return out, False
-
-
-def fetch_all(path: str, base_params: dict, kind: str, max_pages: int = 22) -> tuple:
-    """shadow-audit r1 P0-1 fix: returns (records, hit_cap). hit_cap=True means
-    the LAST page was still full — the window may be truncated and the caller
-    MUST split it or record it as known-incomplete. Never silent."""
-    out = []
-    for page in range(max_pages):
-        params = dict(base_params, limit=PAGE_LIMIT, offset=page * PAGE_LIMIT)
-        try:
-            url, raw = _get(path, params)
-        except Exception as exc:                 # offset wall (HTTP 422) or transient
-            print(f"    page {page} error ({exc}); treating as cap", flush=True)
-            return out, True
-        _archive(kind, url, raw)
-        batch = json.loads(raw)
-        if isinstance(batch, dict):
-            batch = batch.get("data", [])
-        out.extend(batch)
-        if len(batch) < PAGE_LIMIT:
-            return out, False
-    return out, True
 
 
 def day_windows(lo: str, hi: str) -> list:
@@ -240,6 +232,19 @@ def main() -> dict:
         "stamp": stamp,
     }
     (out_dir / f"full_{stamp}_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
+    # R11-2: content-addressed batch manifest — the ONLY legitimate handle downstream
+    def _sha(p):
+        return hashlib.sha256(open(p, "rb").read()).hexdigest()
+    all_complete = not truncated
+    bm = {"batch_id": f"batch_{stamp}",
+          "eligibility_line": ELIGIBILITY_LINE,
+          "files": {f"full_{stamp}_markets.jsonl": _sha(out_dir / f"full_{stamp}_markets.jsonl"),
+                    f"full_{stamp}_events.jsonl": _sha(out_dir / f"full_{stamp}_events.jsonl"),
+                    f"full_{stamp}_summary.json": _sha(out_dir / f"full_{stamp}_summary.json")},
+          "channel_complete": {"incomplete_reasons": truncated},
+          "allowed_use": "g5a_candidate" if all_complete else "dev_lower_bound"}
+    (out_dir / f"batch_manifest_{stamp}.json").write_text(json.dumps(bm, indent=2, ensure_ascii=False))
+    print(f"batch manifest: allowed_use={bm['allowed_use']}", flush=True)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
     return summary
 

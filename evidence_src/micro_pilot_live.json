@@ -1,0 +1,43 @@
+{
+  "mode": "live",
+  "model": "deepseek/deepseek-v4-flash",
+  "n_questions": 6,
+  "arms": {
+    "no_update": {
+      "mean_brier": 0.1504,
+      "failure_rate": 0.0,
+      "chars": 42269,
+      "est_cost_usd": 0.002
+    },
+    "shared_surplus": {
+      "mean_brier": 0.1873,
+      "failure_rate": 0.0,
+      "chars": 62008,
+      "est_cost_usd": 0.0027
+    },
+    "diff_agent_credit": {
+      "mean_brier": 0.1861,
+      "failure_rate": 0.0,
+      "chars": 55829,
+      "est_cost_usd": 0.0025
+    },
+    "c3_action": {
+      "mean_brier": 0.3146,
+      "failure_rate": 0.16666666666666666,
+      "chars": 109220,
+      "est_cost_usd": 0.0047
+    },
+    "c3_compute_matched_sham": {
+      "mean_brier": 0.0817,
+      "failure_rate": 0.0,
+      "chars": 135738,
+      "est_cost_usd": 0.0058
+    }
+  },
+  "receipt_chars_total": 405064,
+  "billed_prompt_tokens": 88758,
+  "billed_completion_tokens": 72121,
+  "est_total_cost_usd": 0.0177,
+  "billed_cost_usd": 0.021,
+  "produced_at_utc": "2026-07-13T23:15:47+00:00"
+}

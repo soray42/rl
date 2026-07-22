@@ -31,7 +31,12 @@ class AnalysisError(Exception):
 # ---------------------------------------------------------------------------
 
 def trajectory_seed(prereg_root_hash: str, index: int) -> int:
-    return int(hashlib.sha256(f"{prereg_root_hash}{index}".encode()).hexdigest()[:16], 16)
+    """Domain-separated (r11 P1-7): 'traj' domain, never colliding with assignment."""
+    return int(hashlib.sha256(f"{prereg_root_hash}|traj|{index}".encode()).hexdigest()[:16], 16)
+
+
+def assignment_seed(prereg_root_hash: str, wave: int) -> int:
+    return int(hashlib.sha256(f"{prereg_root_hash}|assign|{wave}".encode()).hexdigest()[:16], 16)
 
 
 def assign_trajectories(prereg_root_hash: str, k_per_arm: int) -> list:
@@ -43,7 +48,7 @@ def assign_trajectories(prereg_root_hash: str, k_per_arm: int) -> list:
     arms = list(CANONICAL_ARMS)
     for wave in range(k_per_arm):
         perm = list(arms)
-        random.Random(trajectory_seed(prereg_root_hash, wave)).shuffle(perm)
+        random.Random(assignment_seed(prereg_root_hash, wave)).shuffle(perm)
         for slot, arm in enumerate(perm):
             idx = wave * len(arms) + slot
             ledger.append({"trajectory_id": f"traj-{idx:04d}", "index": idx,
@@ -119,14 +124,21 @@ def crossed_bootstrap_taus(records: list, arm_a: str, arm_b: str,
     arm_of = {}
     for r in records:
         arm_of[r["trajectory_id"]] = r["arm"]
+    # R11-5: trajectory resampling is STRATIFIED BY ARM — per-arm counts are
+    # preserved by construction, no replicate ever lacks an arm, the blocked
+    # design is respected (never pooled-then-dropped).
+    trajs_by_arm = defaultdict(list)
+    for t_ in trajs:
+        trajs_by_arm[arm_of[t_]].append(t_)
     taus = []
     for _ in range(n_boot):
         fam_counts = defaultdict(int)
         for _ in families:
             fam_counts[rng.choice(families)] += 1
         traj_counts = defaultdict(int)
-        for _ in trajs:
-            traj_counts[rng.choice(trajs)] += 1
+        for arm_trajs in trajs_by_arm.values():
+            for _ in arm_trajs:
+                traj_counts[rng.choice(arm_trajs)] += 1
         # shadow-audit r1 P0-3 fix: trajectory resample WEIGHTS must survive
         # aggregation. Per-trajectory means are recomputed on family-resampled
         # records, then averaged across trajectories WEIGHTED by traj_counts —
@@ -195,35 +207,71 @@ def four_way(ci_lo: float, ci_hi: float, delta: float) -> str:
     return "inconclusive"
 
 
+def reconcile_ledgers(records: list, assignment_ledger: list,
+                      enrollment: list, censoring: list = None) -> None:
+    """R11-4: full-join validation BEFORE any estimation. A randomized trajectory
+    can never vanish; every enrolled eligible market needs exactly one row
+    (forecast or typed-failure with frozen loss) per trajectory; losses are
+    finite in [0,1]; censored markets are excluded consistently for everyone."""
+    import math
+    censoring = set(censoring or [])
+    expected_trajs = {e["trajectory_id"]: e["arm"] for e in assignment_ledger}
+    if not expected_trajs:
+        raise AnalysisError("empty assignment ledger")
+    eligible = [m for m in enrollment if m not in censoring]
+    if not eligible:
+        raise AnalysisError("no eligible markets after censoring")
+    seen = defaultdict(set)
+    for r in records:
+        t_, mkt = r["trajectory_id"], r["market_id"]
+        if t_ not in expected_trajs:
+            raise AnalysisError(f"unexpected trajectory {t_} not in assignment ledger")
+        if r["arm"] != expected_trajs[t_]:
+            raise AnalysisError(f"trajectory {t_} arm {r['arm']} != ledger {expected_trajs[t_]}")
+        if mkt in censoring:
+            raise AnalysisError(f"record for censored market {mkt} (must be excluded for ALL)")
+        if mkt not in set(enrollment):
+            raise AnalysisError(f"record for unenrolled market {mkt}")
+        if not (isinstance(r["loss"], (int, float)) and math.isfinite(r["loss"])
+                and 0.0 <= r["loss"] <= 1.0):
+            raise AnalysisError(f"loss out of [0,1] or non-finite for {t_}/{mkt}: {r['loss']!r}")
+        if mkt in seen[t_]:
+            raise AnalysisError(f"duplicate market {mkt} for trajectory {t_}")
+        seen[t_].add(mkt)
+    for t_ in expected_trajs:
+        missing = set(eligible) - seen[t_]
+        if missing:
+            raise AnalysisError(
+                f"ITT violation: randomized trajectory {t_} lacks rows for "
+                f"{len(missing)} eligible markets (e.g. {sorted(missing)[:3]}); "
+                f"failures must enter as typed frozen-loss rows, never deletions")
+
+
 def analyze_coprimary(records: list, delta: float, alpha: float = 0.05,
-                      n_boot: int = 2000, seed: int = 20260713) -> dict:
-    """Full pre-specified analysis: both pinned contrasts, Holm-ordered, with
-    Holm-adjusted CI levels driving the four-way decisions."""
-    raw = []
+                      n_boot: int = 2000, seed: int = 20260713,
+                      assignment_ledger: list = None, enrollment: list = None,
+                      censoring: list = None) -> dict:
+    """Both pinned contrasts with BONFERRONI SIMULTANEOUS CIs (R11-5): each
+    co-primary gets a percentile CI at level 1 - alpha/2, giving provable
+    simultaneous coverage >= 1 - alpha without stepdown machinery. Four-way
+    decisions read directly off these simultaneous CIs; unadjusted bootstrap
+    p-values are reported descriptively only."""
+    if assignment_ledger is None or enrollment is None:
+        raise AnalysisError("R11-4: analyze_coprimary requires assignment_ledger and "
+                            "enrollment (plus censoring ledger); ledger-free analysis is forbidden")
+    reconcile_ledgers(records, assignment_ledger, enrollment, censoring)
+    m = len(CANONICAL_COPRIMARY)
+    level = 1 - alpha / m                 # Bonferroni: 97.5% each for alpha=0.05
+    results = {}
     for i, c in enumerate(CANONICAL_COPRIMARY):
         taus = crossed_bootstrap_taus(records, c["arm_a"], c["arm_b"],
                                       n_boot, seed + i)
-        raw.append({"id": c["id"], "arm_a": c["arm_a"], "arm_b": c["arm_b"],
-                    "tau_hat": contrast_tau(records, c["arm_a"], c["arm_b"]),
-                    "taus": taus, "p": bootstrap_p_two_sided(taus)})
-    # Holm: order by p; contrast ranked j (0-based) tested at alpha/(m-j)
-    order = sorted(range(len(raw)), key=lambda i: raw[i]["p"])
-    results, m = {}, len(raw)
-    rejected_so_far = True
-    for rank, i in enumerate(order):
-        adj_alpha = alpha / (m - rank)
-        holm_reject = rejected_so_far and raw[i]["p"] <= adj_alpha
-        if not holm_reject:
-            rejected_so_far = False     # Holm is sequentially rejective
-        ci = percentile_ci(raw[i]["taus"], 1 - adj_alpha)
-        results[raw[i]["id"]] = {
-            "arm_a": raw[i]["arm_a"], "arm_b": raw[i]["arm_b"],
-            "tau_hat": raw[i]["tau_hat"], "p": raw[i]["p"],
-            "holm_adjusted_alpha": adj_alpha, "holm_reject_null": holm_reject,
+        ci = percentile_ci(taus, level)
+        results[c["id"]] = {
+            "arm_a": c["arm_a"], "arm_b": c["arm_b"],
+            "tau_hat": contrast_tau(records, c["arm_a"], c["arm_b"]),
+            "p_unadjusted_descriptive": bootstrap_p_two_sided(taus),
+            "ci_level": level, "multiplicity": "bonferroni_simultaneous",
             "ci": ci, "decision": four_way(ci[0], ci[1], delta),
         }
-    # directional claims additionally require the Holm rejection
-    for r in results.values():
-        if r["decision"] in ("meaningful_benefit", "meaningful_harm") and not r["holm_reject_null"]:
-            r["decision"] = "inconclusive"
     return results

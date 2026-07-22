@@ -59,12 +59,23 @@ class Transcript:
     prompt_shas: list = field(default_factory=list)
     failure_class: Optional[str] = None
 
+    def to_bundle(self, meta: dict = None) -> dict:
+        """R11-6 canonical bundle: EVERYTHING that determines scientific meaning."""
+        return {"schema_version": "transcript_bundle_v1",
+                "question_id": self.question_id,
+                "meta": meta or {},
+                "messages": [[m.agent_id, m.round, m.content] for m in self.messages],
+                "votes": {k: repr(v) for k, v in sorted(self.votes.items())},
+                "final_q": repr(self.final_q),
+                "failure_class": self.failure_class,
+                "prompt_shas": list(self.prompt_shas),
+                "receipts": [r.__dict__ for r in self.receipts]}
+
     def sha(self) -> str:
-        return hashlib.sha256(json.dumps(
-            {"q": self.question_id,
-             "msgs": [[m.agent_id, m.round, m.content] for m in self.messages],
-             "votes": {k: repr(v) for k, v in sorted(self.votes.items())},
-             "final": repr(self.final_q)}, sort_keys=True).encode()).hexdigest()
+        """Covers the FULL canonical bundle (r11 P0-11-4): receipts, prompt shas
+        and failure class included — provenance-different transcripts never collide."""
+        return hashlib.sha256(json.dumps(self.to_bundle(),
+                                         sort_keys=True).encode()).hexdigest()
 
 
 VOTE_RE = re.compile(r"FINAL:\s*(1(?:\.0+)?|0(?:\.\d+)?)\s*$", re.MULTILINE)
@@ -87,6 +98,13 @@ def parse_probability(text: str) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # Backends
 # ---------------------------------------------------------------------------
+
+class BackendFailure(Exception):
+    def __init__(self, failure_class: str, receipt: "CallReceipt" = None):
+        super().__init__(failure_class)
+        self.failure_class = failure_class
+        self.receipt = receipt
+
 
 class StubBackend:
     """Deterministic pseudo-agent: forecast derived from sha(prompt+seed).
@@ -123,10 +141,11 @@ class OpenRouterBackend:
         if not self.key:
             raise RuntimeError("OPENROUTER_API_KEY not set; use StubBackend for dry runs")
 
-    def complete(self, prompt: str, seed: int, purpose: str, model: str = None) -> tuple:
+    def complete(self, prompt: str, seed: int, purpose: str, model: str = None,
+                 max_tokens: int = 400) -> tuple:
         model = model or self.model
         payload = {"model": model, "temperature": 0, "seed": seed,
-                   "max_tokens": 400,
+                   "max_tokens": max_tokens,
                    "messages": [{"role": "user", "content": prompt}]}
         if self.provider_pin:
             payload["provider"] = {"order": [self.provider_pin], "allow_fallbacks": False}
@@ -148,7 +167,11 @@ class OpenRouterBackend:
             except urllib.error.HTTPError as e:
                 if e.code == 429 and attempt < 3:   # pinned provider rate limit: back off
                     continue
-                raise
+                raise BackendFailure("provider_failure") from e
+            except (urllib.error.URLError, TimeoutError) as e:
+                raise BackendFailure("timeout") from e
+            except (json.JSONDecodeError, KeyError) as e:
+                raise BackendFailure("invalid_parse") from e
         # providers occasionally return content=None (empty/refusal/reasoning-only);
         # that is a typed empty output, NOT a crash — parse_probability(None-safe "")
         # will yield no vote and the scoring fallback handles it honestly
@@ -200,7 +223,13 @@ class TeamDeliberation:
             prompt = materialize_prompt(question, evidence_slices[i], retrieved,
                                         [], aid, "independent estimate")
             t.prompt_shas.append(hashlib.sha256(prompt.encode()).hexdigest())
-            text, rec = self.backend.complete(prompt, seed + i, "round1")
+            try:
+                text, rec = self.backend.complete(prompt, seed + i, "round1")
+            except BackendFailure as bf:      # R11-7: typed, never trajectory-fatal
+                t.receipts.append(CallReceipt("failed", "-", "round1", "0"*64, "0"*64,
+                                              len(prompt), 0, 0))
+                t.messages.append(Message(aid, 1, f"[FAILURE:{bf.failure_class}]"))
+                continue
             t.receipts.append(rec)
             t.messages.append(Message(aid, 1, text))
         # round 2: discussion + final vote
@@ -209,7 +238,14 @@ class TeamDeliberation:
             prompt = materialize_prompt(question, evidence_slices[i], retrieved,
                                         r1, aid, "final vote after discussion")
             t.prompt_shas.append(hashlib.sha256(prompt.encode()).hexdigest())
-            text, rec = self.backend.complete(prompt, seed + 100 + i, "round2")
+            try:
+                text, rec = self.backend.complete(prompt, seed + 100 + i, "round2")
+            except BackendFailure as bf:
+                t.receipts.append(CallReceipt("failed", "-", "round2", "0"*64, "0"*64,
+                                              len(prompt), 0, 0))
+                t.messages.append(Message(aid, 2, f"[FAILURE:{bf.failure_class}]"))
+                t.votes[aid] = None
+                continue
             t.receipts.append(rec)
             t.messages.append(Message(aid, 2, text))
             t.votes[aid] = parse_probability(text)
