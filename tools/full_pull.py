@@ -49,13 +49,22 @@ def fetch_all(path: str, base_params: dict, kind: str, max_pages: int = 22) -> t
     return out, True
 
 
-def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000) -> tuple:
+def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000,
+                 run_id: str = "") -> tuple:
     """R11-1: official contract — next page via AFTER_CURSOR, urlencoded like any
     opaque query value. Page ledger records cursor/response SHAs and id ranges;
     no-progress (repeat page SHA OR non-advancing ids OR non-advancing cursor)
-    fails closed. Returns (records, complete)."""
-    out, after, seen_pages, prev_cursor_sha, prev_max_id = [], None, set(), None, None
+    fails closed.
+
+    r13 P0-13-1 fail-closed set: the endpoint's OWN key must be present (a
+    /markets response carrying only 'events' is a contract violation, not data);
+    every row must have an id; ids must be unique within AND across pages; an
+    empty page that still advertises next_cursor contradicts the documented
+    'next_cursor omitted on the final page' contract. All four => INCOMPLETE.
+    Returns (records, complete)."""
+    out, after, seen_pages, prev_cursor_sha = [], None, set(), None
     seen_ids_global = set()
+    expected_key = "markets" if path.startswith("/markets") else "events"
     ledger_path = DATA / "keyset_page_ledger.jsonl"
     for page in range(max_pages):
         params = dict(base_params, limit=PAGE_LIMIT)
@@ -65,21 +74,33 @@ def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000)
             url, raw = _get(f"{path}/keyset", params)
             sha = hashlib.sha256(raw).hexdigest()
             doc = json.loads(raw)
-            # R12: response SCHEMA must contain the expected list key; an error
-            # body like {"error": ...} is INCOMPLETE, never a clean stop
-            if not isinstance(doc, dict) or not ({"markets", "events"} & set(doc)):
-                print(f"    keyset page {page}: unexpected schema {list(doc)[:3] if isinstance(doc, dict) else type(doc).__name__}; INCOMPLETE", flush=True)
+            # R12/r13: response SCHEMA must contain THIS endpoint's list key;
+            # an error body or a wrong-endpoint key is INCOMPLETE, never a stop
+            if not isinstance(doc, dict) or expected_key not in doc:
+                print(f"    keyset page {page}: expected key '{expected_key}' absent "
+                      f"({list(doc)[:3] if isinstance(doc, dict) else type(doc).__name__}); INCOMPLETE", flush=True)
                 return out, False
-            batch = doc.get("markets") or doc.get("events") or []
+            batch = doc.get(expected_key) or []
             nxt = doc.get("next_cursor")
-            ids = [str(m.get("id")) for m in batch]
+            raw_ids = [m.get("id") for m in batch]
+            if any(i is None for i in raw_ids):
+                print(f"    keyset page {page}: {sum(1 for i in raw_ids if i is None)} rows "
+                      f"missing id; INCOMPLETE", flush=True)
+                return out, False
+            ids = [str(i) for i in raw_ids]
+            if len(ids) != len(set(ids)):
+                print(f"    keyset page {page}: duplicate ids WITHIN page; INCOMPLETE", flush=True)
+                return out, False
         except Exception as exc:
             print(f"    keyset page {page} error ({exc}); INCOMPLETE", flush=True)
             return out, False
         try:
             with open(ledger_path, "a") as lf:
+                # P1-13-3: rows carry run identity + full request context so a
+                # batch can be traced back to its exact pages across runs
                 lf.write(json.dumps({
-                    "page": page, "kind": kind,
+                    "run_id": run_id, "page": page, "kind": kind, "url": url,
+                    "params": {k: v for k, v in base_params.items()},
                     "incoming_cursor_sha": hashlib.sha256((after or "").encode()).hexdigest()[:16],
                     "next_cursor_sha": hashlib.sha256((nxt or "").encode()).hexdigest()[:16],
                     "response_sha": sha, "n": len(ids),
@@ -115,7 +136,12 @@ def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000)
         out.extend(batch)
         if page % 100 == 0:
             print(f"    keyset page {page}: cum {len(out)}", flush=True)
-        if not nxt or not batch:
+        if not batch:
+            if nxt:      # r13: empty page + continuation cursor contradicts the contract
+                print(f"    keyset page {page}: EMPTY page but next_cursor present; INCOMPLETE", flush=True)
+                return out, False
+            return out, True
+        if not nxt:      # documented: next_cursor omitted on the final page
             return out, True
         after = nxt
     print("    keyset max_pages exhausted: INCOMPLETE", flush=True)
@@ -162,7 +188,7 @@ def main() -> dict:
     if use_keyset:
         markets, complete = fetch_keyset("/markets", {"closed": "true",
                                                       "end_date_min": ELIGIBILITY_LINE},
-                                         "gamma_markets")
+                                         "gamma_markets", run_id=stamp)
         if not complete:
             truncated.append("closed-keyset-incomplete")
         seen_ids = {str(m.get("id")) for m in markets}
@@ -191,22 +217,27 @@ def main() -> dict:
     fresh_active = [m for m in active if str(m.get("id")) not in seen_ids]
     print(f"active: +{len(fresh_active)}", flush=True)
     # shadow r2 P0: refuse to WRITE a ghost dataset silently
+    overrides = []
     if len(markets) < 10000:
         print(f"SANITY REFUSAL: only {len(markets)} closed markets collected "
               f"(expected >=10k in-window); NOT writing views. Set P1V5_ALLOW_SMALL_PULL=1 to override.", flush=True)
         import os as _o
         if not _o.environ.get("P1V5_ALLOW_SMALL_PULL"):
             raise SystemExit(3)
+        # r13 P0-13-2: an override is a completeness concession — it must be
+        # RECORDED and it machine-forces the batch down to dev_lower_bound
+        overrides.append("small_pull_override")
 
     events = []
     try:
         eb, ecomplete = fetch_keyset("/events", {"closed": "true",
                                                  "end_date_min": ELIGIBILITY_LINE},
-                                     "gamma_events")
+                                     "gamma_events_closed", run_id=stamp)
         events.extend(eb)
         if not ecomplete:
             truncated.append("events-closed-keyset-incomplete")
-        eb, ecomplete = fetch_keyset("/events", {"closed": "false"}, "gamma_events")
+        eb, ecomplete = fetch_keyset("/events", {"closed": "false"},
+                                     "gamma_events_active", run_id=stamp)
         events.extend(eb)
         if not ecomplete:
             truncated.append("events-active-keyset-incomplete")
@@ -277,13 +308,21 @@ def main() -> dict:
     # R11-2: content-addressed batch manifest — the ONLY legitimate handle downstream
     def _sha(p):
         return hashlib.sha256(open(p, "rb").read()).hexdigest()
-    all_complete = not truncated
+    # r13 P0-13-2: allowed_use is MACHINE-DERIVED from completeness + overrides;
+    # consumers re-derive and refuse any manifest where the label disagrees
+    all_complete = not truncated and not overrides
+    ledger_p = DATA / "keyset_page_ledger.jsonl"
     bm = {"batch_id": f"batch_{stamp}",
           "eligibility_line": ELIGIBILITY_LINE,
           "files": {f"full_{stamp}_markets.jsonl": _sha(out_dir / f"full_{stamp}_markets.jsonl"),
                     f"full_{stamp}_events.jsonl": _sha(out_dir / f"full_{stamp}_events.jsonl"),
-                    f"full_{stamp}_summary.json": _sha(out_dir / f"full_{stamp}_summary.json")},
-          "channel_complete": {"incomplete_reasons": truncated},
+                    f"full_{stamp}_summary.json": _sha(out_dir / f"full_{stamp}_summary.json"),
+                    f"full_{stamp}_tags.json": _sha(out_dir / f"full_{stamp}_tags.json")},
+          # P1-13-3: page ledger + collection log bound by sha (DATA-root artifacts)
+          "aux": {"keyset_page_ledger_sha256": _sha(ledger_p) if ledger_p.exists() else None,
+                  "collection_log_sha256": _sha(DATA / "collection_log.jsonl")
+                                           if (DATA / "collection_log.jsonl").exists() else None},
+          "channel_complete": {"incomplete_reasons": truncated, "overrides": overrides},
           "allowed_use": "g5a_candidate" if all_complete else "dev_lower_bound"}
     (out_dir / f"batch_manifest_{stamp}.json").write_text(json.dumps(bm, indent=2, ensure_ascii=False))
     print(f"batch manifest: allowed_use={bm['allowed_use']}", flush=True)

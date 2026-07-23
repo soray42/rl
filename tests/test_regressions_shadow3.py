@@ -171,13 +171,22 @@ class TestPanelLineage(unittest.TestCase):
 
 
 class TestG5aSchemaRejectsDevBatch(unittest.TestCase):
+    """shadow r3 + r13 P0-13-3: the original version of this test used "a"*64
+    fake shas with NO referent files as its positive case — exactly the attack
+    the gate had to close. It now builds REAL referents; see also
+    test_regressions_r13.TestG5aReferentChain for the full eval path."""
+
     def _evidence(self, allowed_use):
         return {"produced_by": "test fixture", "produced_at_utc": "2026-07-23T00:00:00+00:00",
                 "inputs": {"manifest_sha256": "0" * 64, "input_lock_sha256": "0" * 64},
                 "metrics": {"independent_family_transitions": 100, "required_by_g6": 50,
                             "batch_allowed_use": allowed_use,
                             "batch_manifest_sha256": "a" * 64,
-                            "registry_sha256": "b" * 64},
+                            "registry_sha256": "b" * 64,
+                            "panel_sha256": "c" * 64,
+                            "batch_manifest_path": "x/bm.json",
+                            "registry_path": "x/reg.jsonl",
+                            "panel_path": "x/panel.json"},
                 "verdict": "PASS"}
 
     def test_schema_and_verdict(self):
@@ -193,6 +202,10 @@ class TestG5aSchemaRejectsDevBatch(unittest.TestCase):
                                 "estimand": {"contrasts": {"alpha": 0.05}}})
         self.assertTrue(rules["G5a"](self._evidence("g5a_candidate")["metrics"]))
         self.assertFalse(rules["G5a"](self._evidence("dev_lower_bound")["metrics"]))
+        # r13: a required_by_g6 below the frozen small-cluster floor can never PASS
+        low = self._evidence("g5a_candidate")["metrics"]
+        low["required_by_g6"] = 1
+        self.assertFalse(rules["G5a"](low))
 
 
 class TestSeedScheduleRegeneration(unittest.TestCase):
@@ -201,32 +214,35 @@ class TestSeedScheduleRegeneration(unittest.TestCase):
         root = "root-hash-shadow3"
         led = assign_trajectories(root, 1)
         recs = [{"trajectory_id": e["trajectory_id"], "arm": e["arm"],
-                 "family_id": "f0", "market_id": "m0", "loss": 0.5} for e in led]
+                 "family_id": "f0", "market_id": "m0", "q": 0.3} for e in led]
         enr = [{"market_id": "m0", "family_id": "f0"}]
-        return root, led, recs, enr
+        stl = [{"market_id": "m0", "y": 1, "resolved_at_utc": "2026-07-01T00:00:00+00:00"}]
+        return root, led, recs, enr, stl
 
     def test_correct_ledger_regenerates(self):
         from p1v5.analysis import reconcile_ledgers
-        root, led, recs, enr = self._fixture()
-        out = reconcile_ledgers(recs, led, enr, prereg_root_hash=root)
+        root, led, recs, enr, stl = self._fixture()
+        out = reconcile_ledgers(recs, led, enr, prereg_root_hash=root, settlement=stl)
         self.assertEqual(len(out["waves"]), 1)
+        # r13 P0-13-4: the returned records carry DERIVED losses (q=0.3, y=1)
+        self.assertAlmostEqual(out["records"][0]["loss"], 0.49)
 
     def test_forged_seed_rejected(self):
         from p1v5.analysis import AnalysisError, reconcile_ledgers
-        root, led, recs, enr = self._fixture()
+        root, led, recs, enr, stl = self._fixture()
         led[0] = dict(led[0], seed=999999999999)
         with self.assertRaises(AnalysisError):
-            reconcile_ledgers(recs, led, enr, prereg_root_hash=root)
+            reconcile_ledgers(recs, led, enr, prereg_root_hash=root, settlement=stl)
 
     def test_swapped_arm_permutation_rejected(self):
         from p1v5.analysis import AnalysisError, reconcile_ledgers
-        root, led, recs, enr = self._fixture()
+        root, led, recs, enr, stl = self._fixture()
         a, b = dict(led[0]), dict(led[1])
         led[0], led[1] = dict(a, arm=b["arm"]), dict(b, arm=a["arm"])
         recs = [{"trajectory_id": e["trajectory_id"], "arm": e["arm"],
-                 "family_id": "f0", "market_id": "m0", "loss": 0.5} for e in led]
+                 "family_id": "f0", "market_id": "m0", "q": 0.3} for e in led]
         with self.assertRaises(AnalysisError):
-            reconcile_ledgers(recs, led, enr, prereg_root_hash=root)
+            reconcile_ledgers(recs, led, enr, prereg_root_hash=root, settlement=stl)
 
 
 class TestFullPullMainSmoke(unittest.TestCase):
@@ -261,7 +277,10 @@ class TestFullPullMainSmoke(unittest.TestCase):
         bm_files = list((tmp / "views").glob("batch_manifest_*.json"))
         self.assertEqual(len(bm_files), 1)
         bm = json.loads(bm_files[0].read_text())
-        self.assertEqual(bm["allowed_use"], "g5a_candidate")
+        # r13 P0-13-2: the small-pull override is a recorded completeness
+        # concession — it machine-forces dev_lower_bound, never g5a_candidate
+        self.assertEqual(bm["allowed_use"], "dev_lower_bound")
+        self.assertIn("small_pull_override", bm["channel_complete"]["overrides"])
         for fname, sha in bm["files"].items():
             self.assertEqual(
                 hashlib.sha256((tmp / "views" / fname).read_bytes()).hexdigest(), sha, fname)

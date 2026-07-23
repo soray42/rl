@@ -27,8 +27,18 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
-from p1v5.checks import (ATTESTATION_ANCHOR_PATH, EXTERNAL_PINS, LOCK_PATH,  # noqa: E402
-                         PREDICATES, load_manifest, manifest_sha256)
+from p1v5.analysis import MIN_FAMILIES  # noqa: E402
+from p1v5.checks import (ATTESTATION_ANCHOR_PATH, CANONICAL_ARMS, EXTERNAL_PINS,  # noqa: E402
+                         LOCK_PATH, PREDICATES, load_manifest, manifest_sha256)
+
+
+def _strict_json(path):
+    """r13 P0-13-8: SOURCE artifacts get the same strict parse as evidence —
+    RFC 8259 forbids NaN/Infinity; Python's default loads() does not."""
+    doc = json.loads(path.read_text(),
+                     parse_constant=lambda n: (_ for _ in ()).throw(ValueError(n)))
+    _assert_evidence_finite(doc)
+    return doc
 
 _HEX64 = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
 _NONNEG_INT = {"type": "integer", "minimum": 0}
@@ -76,15 +86,22 @@ EVIDENCE_SCHEMAS = {
                             ["cost_usd_estimate", "cost_error_pct", "n_dry_run_events",
                              "source_report_sha256", "pricing_table_sha256",
                              "receipt_bundle_sha256"]),
-    # shadow r3 (P0-12-3 core): G5a evidence must CARRY its batch lineage and the
-    # allowed_use tier is pinned by const — a dev_lower_bound batch structurally
-    # cannot produce schema-valid G5a evidence
+    # shadow r3 + r13 P0-13-3: G5a evidence must CARRY its batch lineage AND
+    # name the actual files — the runner OPENS batch manifest, registry and
+    # panel, re-hashes them, re-derives allowed_use, and RECOMPUTES the
+    # transition count; a sha with no verified referent can never support PASS
     "G5a": _evidence_schema({"independent_family_transitions": _NONNEG_INT, "required_by_g6": _POS_INT,
                              "batch_allowed_use": {"const": "g5a_candidate"},
                              "batch_manifest_sha256": _HEX64,
-                             "registry_sha256": _HEX64},
+                             "registry_sha256": _HEX64,
+                             "panel_sha256": _HEX64,
+                             "batch_manifest_path": {"type": "string", "minLength": 1},
+                             "registry_path": {"type": "string", "minLength": 1},
+                             "panel_path": {"type": "string", "minLength": 1}},
                             ["independent_family_transitions", "required_by_g6",
-                             "batch_allowed_use", "batch_manifest_sha256", "registry_sha256"]),
+                             "batch_allowed_use", "batch_manifest_sha256", "registry_sha256",
+                             "panel_sha256", "batch_manifest_path", "registry_path",
+                             "panel_path"]),
     "G6": _evidence_schema({"type1_ucb": _UNIT, "power_lcb": _UNIT, "n_sims": _POS_INT,
                             "delta_frozen_sha256": _HEX64},
                            ["type1_ucb", "power_lcb", "n_sims", "delta_frozen_sha256"]),
@@ -115,7 +132,10 @@ def _verdict_rules(manifest):
         "G4": lambda x: x["replay_fidelity"] >= 0.90 and x["n_replayed"] >= 10,
         "G7a": lambda x: (x["cost_error_pct"] <= 20 and x["n_dry_run_events"] >= 5
                           and x["cost_usd_estimate"] <= llm_cap),
+        # r13: required_by_g6 may not undercut the frozen small-cluster floor —
+        # "1 >= 1" style self-attestation is structurally impossible
         "G5a": lambda x: (x["independent_family_transitions"] >= x["required_by_g6"]
+                          and x["required_by_g6"] >= MIN_FAMILIES
                           and x["batch_allowed_use"] == "g5a_candidate"),
         "G6": lambda x: (x["type1_ucb"] <= alpha and x["power_lcb"] >= 0.80
                          and x["n_sims"] >= 1000),
@@ -216,8 +236,12 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
             got = hashlib.sha256(p_.read_bytes()).hexdigest()
             if e["metrics"][key] != got:
                 return {"status": "FAIL", "reason": f"G7a {key} != recomputed sha of {p_.name}"}
-        rep = json.loads(src.read_text())
-        pricing = json.loads(prc.read_text())
+        try:
+            rep = _strict_json(src)
+            pricing = _strict_json(prc)
+        except Exception as exc:
+            return {"status": "FAIL",
+                    "reason": f"G7a source/pricing not strict RFC-8259 JSON: {exc}"}
         model_p = pricing.get(rep.get("model"))
         if not isinstance(model_p, dict) or "in_per_mtok" not in model_p:
             return {"status": "FAIL", "reason": f"G7a pricing table has no entry for {rep.get('model')}"}
@@ -247,6 +271,82 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
         rb = hashlib.sha256(json.dumps(sorted(bundles.values())).encode()).hexdigest()
         if e["metrics"]["receipt_bundle_sha256"] != rb:
             return {"status": "FAIL", "reason": "G7a receipt_bundle_sha256 != recomputed from source bundles"}
+        # r13 P0-13-8: self-reported bundle shas prove nothing — OPEN every
+        # persisted bundle, re-hash it, check arm x question cardinality, and
+        # re-sum billed tokens from the per-call receipts inside the bundles
+        td_rel = rep.get("transcript_dir")
+        if not td_rel:
+            return {"status": "FAIL",
+                    "reason": "G7a source lacks transcript_dir (bundle files unlocatable)"}
+        td = ROOT / td_rel
+        arm_counts, sum_pt, sum_ct = {}, 0, 0
+        for key in sorted(bundles):
+            arm, _, qid = key.partition("/")
+            bpath = td / f"{arm}_{qid}.json"
+            if not bpath.exists():
+                return {"status": "FAIL", "reason": f"G7a bundle file missing on disk: {bpath.name}"}
+            if hashlib.sha256(bpath.read_bytes()).hexdigest() != bundles[key]:
+                return {"status": "FAIL", "reason": f"G7a bundle sha mismatch for {key}"}
+            arm_counts[arm] = arm_counts.get(arm, 0) + 1
+            try:
+                bdoc = _strict_json(bpath)
+            except Exception as exc:
+                return {"status": "FAIL", "reason": f"G7a bundle {key} not strict JSON: {exc}"}
+            for rcp in bdoc.get("receipts", []):
+                sum_pt += rcp.get("prompt_tokens", 0)
+                sum_ct += rcp.get("completion_tokens", 0)
+        if (set(arm_counts) != set(CANONICAL_ARMS)
+                or set(arm_counts.values()) != {rep.get("n_questions")}):
+            return {"status": "FAIL",
+                    "reason": f"G7a bundle cardinality != arms x questions: {arm_counts}"}
+        if sum_pt != bp or sum_ct != bc:
+            return {"status": "FAIL",
+                    "reason": f"G7a billed tokens {bp}/{bc} != receipts sum {sum_pt}/{sum_ct}"}
+    if gate["id"] == "G5a":
+        # r13 P0-13-3: the yield chain has REFERENTS — open batch manifest,
+        # registry and panel; re-hash each; re-derive allowed_use from channel
+        # completeness; verify the lineage links; recompute the transition count
+        m_ = e["metrics"]
+        bmp, rgp, pnp = (ROOT / m_["batch_manifest_path"], ROOT / m_["registry_path"],
+                         ROOT / m_["panel_path"])
+        for p_, key in ((bmp, "batch_manifest_sha256"), (rgp, "registry_sha256"),
+                        (pnp, "panel_sha256")):
+            if not p_.exists():
+                return {"status": "FAIL", "reason": f"G5a referent missing: {p_}"}
+            if hashlib.sha256(p_.read_bytes()).hexdigest() != m_[key]:
+                return {"status": "FAIL", "reason": f"G5a {key} != recomputed sha of {p_.name}"}
+        try:
+            bm_ = _strict_json(bmp)
+            pn_ = _strict_json(pnp)
+        except Exception as exc:
+            return {"status": "FAIL", "reason": f"G5a referent not strict JSON: {exc}"}
+        cc_ = bm_.get("channel_complete")
+        if not isinstance(cc_, dict) or cc_.get("incomplete_reasons") or cc_.get("overrides"):
+            return {"status": "FAIL",
+                    "reason": "G5a batch is not machine-complete (incomplete_reasons/overrides "
+                              "non-empty); allowed_use=g5a_candidate cannot be derived"}
+        if bm_.get("allowed_use") != "g5a_candidate":
+            return {"status": "FAIL", "reason": "G5a batch manifest allowed_use != g5a_candidate"}
+        try:
+            first = json.loads(rgp.read_text().splitlines()[0])
+            lin_ = first["_lineage"]
+        except Exception:
+            return {"status": "FAIL", "reason": "G5a registry lacks a parseable _lineage header"}
+        if lin_.get("batch_manifest_sha256") != m_["batch_manifest_sha256"] \
+                or lin_.get("allowed_use") != "g5a_candidate":
+            return {"status": "FAIL",
+                    "reason": "G5a registry lineage does not link to THIS g5a_candidate batch"}
+        pn_lin = (pn_.get("summary") or {}).get("lineage") or {}
+        if pn_lin.get("registry_sha256") != m_["registry_sha256"] \
+                or pn_lin.get("batch_manifest_sha256") != m_["batch_manifest_sha256"]:
+            return {"status": "FAIL",
+                    "reason": "G5a panel lineage does not link to THIS registry/batch"}
+        recomputed_tr = sum(max(0, int(s.get("n_instances", 0)) - 1)
+                            for s in pn_.get("panel", []))
+        if recomputed_tr != m_["independent_family_transitions"]:
+            return {"status": "FAIL",
+                    "reason": f"G5a independent_family_transitions {m_['independent_family_transitions']} "
+                              f"!= recomputed from panel ({recomputed_tr})"}
     binding = HASH_BINDINGS.get(gate["id"])
     if binding is not None:
         key, target_rel = binding

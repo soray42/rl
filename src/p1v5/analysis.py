@@ -1,13 +1,15 @@
-"""E3: randomized assignment, ITT estimator, crossed bootstrap, Holm, four-way.
+"""E3: randomized assignment, ITT estimator, crossed bootstrap, four-way rule.
 
 Implements the manifest's frozen statistical design:
 - assignment: blocked equal-probability randomization of the 5 arms per
   enrollment wave, seeds = sha256(prereg_root_hash + index), ledgered;
-- endpoint: per-trajectory mean Brier over eligible markets (manifest metric);
-- contrast: tau = mean(arm_a) - mean(arm_b), negative favors arm_a;
-- uncertainty: crossed cluster bootstrap resampling event FAMILIES and
-  TRAJECTORIES independently (round-4/round-5 pseudo-replication lessons);
-- multiplicity: Holm over the two pinned co-primary contrasts;
+- endpoint: per-trajectory mean Brier over eligible markets, RECOMPUTED from
+  each record's committed forecast q and the settlement ledger's terminal y
+  (r13 P0-13-4: caller-supplied losses are forbidden);
+- contrast: within-wave contrast mean, negative favors arm_a;
+- uncertainty: crossed bootstrap resampling complete WAVES x FAMILIES jointly;
+- multiplicity: Bonferroni NOMINAL simultaneous percentile CIs over the two
+  pinned co-primary contrasts (coverage certified only by production G6);
 - decision: four-way interval rule (benefit/equivalence/harm/inconclusive);
   equivalence ONLY via CI containment in [-delta, +delta] (Lakens discipline).
 
@@ -15,6 +17,7 @@ This module is deliberately dependency-free and deterministic given seeds.
 G6's power/Type-I simulation must use THESE functions (audit E3 requirement).
 """
 
+import datetime
 import hashlib
 import random
 from collections import defaultdict
@@ -195,7 +198,7 @@ def bootstrap_p_two_sided(taus: list) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Holm + four-way decision over the two pinned co-primary contrasts
+# Bonferroni-nominal CIs + four-way decision over the two pinned co-primary contrasts
 # ---------------------------------------------------------------------------
 
 def four_way(ci_lo: float, ci_hi: float, delta: float) -> str:
@@ -212,10 +215,27 @@ def four_way(ci_lo: float, ci_hi: float, delta: float) -> str:
 
 FROZEN_FAILURE_LOSS = 1.0     # manifest estimand.endpoint.failure_loss (schema const)
 
+# r13 P0-13-6: censoring reasons are a FROZEN enum — free-text (or empty)
+# reasons carry no science and were an accepted bypass
+CENSOR_REASONS = ("unresolved_at_cutoff", "market_voided", "settlement_invalid")
+
+
+def _parse_utc_ts(ts):
+    """Calendar-valid, timezone-aware, offset-zero UTC instant (else None)."""
+    if not isinstance(ts, str):
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None or dt.utcoffset() != datetime.timedelta(0):
+        return None
+    return dt
+
 
 def reconcile_ledgers(records: list, assignment_ledger: list,
                       enrollment: list, censoring: list = None,
-                      prereg_root_hash: str = None) -> dict:
+                      prereg_root_hash: str = None, settlement: list = None) -> dict:
     """R12 (P0-12-4/5): TYPED ledgers with scientific semantics, not bare lists.
     - assignment rows need trajectory_id/arm/wave/index/seed; duplicate ids fatal;
     - enrollment rows need market_id + family_id: the family MAPPING lives here,
@@ -261,15 +281,52 @@ def reconcile_ledgers(records: list, assignment_ledger: list,
         if e["market_id"] in family_of:
             raise AnalysisError(f"duplicate enrollment market {e['market_id']}")
         family_of[e["market_id"]] = e["family_id"]
-    censored = set()
+    # r13 P0-13-4: terminal outcomes come from a SETTLEMENT ledger; every
+    # enrolled market must be settled XOR censored (settlement-or-censoring
+    # completeness), and losses below are derived, never accepted
+    if settlement is None:
+        raise AnalysisError("R13-4: settlement ledger required — rows {market_id, y, "
+                            "resolved_at_utc}; caller-supplied losses are forbidden")
+    y_of = {}
+    for s in settlement:
+        if not isinstance(s, dict) or not all(k in s for k in ("market_id", "y", "resolved_at_utc")):
+            raise AnalysisError(f"settlement row must be {{market_id, y, resolved_at_utc}}: {s!r}")
+        if s["y"] not in (0, 1):
+            raise AnalysisError(f"settlement y must be terminal binary 0/1, got {s['y']!r} "
+                                f"for {s['market_id']}")
+        if _parse_utc_ts(s["resolved_at_utc"]) is None:
+            raise AnalysisError(f"settlement resolved_at_utc is not a valid UTC instant: {s!r}")
+        if s["market_id"] in y_of:
+            raise AnalysisError(f"duplicate settlement row for market {s['market_id']}")
+        if s["market_id"] not in family_of:
+            raise AnalysisError(f"settlement row for unenrolled market {s['market_id']}")
+        y_of[s["market_id"]] = int(s["y"])
+    censored, cutoffs = set(), set()
     for c in censoring or []:
         if not isinstance(c, dict) or not all(k in c for k in ("market_id", "reason", "cutoff_utc")):
             raise AnalysisError(f"censoring row needs market_id/reason/cutoff_utc receipts: {c!r}")
+        if c["reason"] not in CENSOR_REASONS:
+            raise AnalysisError(f"censoring reason must be in the frozen enum {CENSOR_REASONS}, "
+                                f"got {c['reason']!r}")
+        if _parse_utc_ts(c["cutoff_utc"]) is None:
+            raise AnalysisError(f"censoring cutoff_utc is not a valid UTC instant: {c!r}")
+        if c["market_id"] not in family_of:
+            raise AnalysisError(f"censoring row for unenrolled market {c['market_id']}")
+        if c["market_id"] in y_of:
+            raise AnalysisError(f"market {c['market_id']} appears in BOTH settlement and censoring")
         censored.add(c["market_id"])
+        cutoffs.add(c["cutoff_utc"])
+    if len(cutoffs) > 1:
+        raise AnalysisError(f"censoring must use ONE frozen design cutoff, got {sorted(cutoffs)}")
+    unaccounted = sorted(set(family_of) - set(y_of) - censored)
+    if unaccounted:
+        raise AnalysisError(f"settlement-or-censoring incomplete: enrolled markets with neither "
+                            f"terminal outcome nor censoring receipt: {unaccounted[:3]}")
     eligible = [m for m in family_of if m not in censored]
     if not eligible:
         raise AnalysisError("no eligible markets after censoring")
     seen = defaultdict(set)
+    derived = []
     for r in records:
         t_, mkt = r["trajectory_id"], r["market_id"]
         if t_ not in expected_trajs:
@@ -283,15 +340,35 @@ def reconcile_ledgers(records: list, assignment_ledger: list,
         if r.get("family_id") != family_of[mkt]:
             raise AnalysisError(f"family relabel: record says {r.get('family_id')!r} for {mkt}, "
                                 f"enrollment fixes {family_of[mkt]!r}")
-        if not (isinstance(r["loss"], (int, float)) and math.isfinite(r["loss"])
-                and 0.0 <= r["loss"] <= 1.0):
-            raise AnalysisError(f"loss out of [0,1] or non-finite for {t_}/{mkt}: {r['loss']!r}")
-        if r.get("failure_class") is not None and r["loss"] != FROZEN_FAILURE_LOSS:
-            raise AnalysisError(f"typed failure row must carry frozen loss "
-                                f"{FROZEN_FAILURE_LOSS}, got {r['loss']} ({r['failure_class']})")
+        if r.get("failure_class") is not None:
+            # a failed call has no committed forecast; its loss is the frozen constant
+            if not (isinstance(r["failure_class"], str) and r["failure_class"]):
+                raise AnalysisError(f"failure_class must be a non-empty string: {r!r}")
+            if "q" in r:
+                raise AnalysisError(f"failure row for {t_}/{mkt} carries a forecast q — "
+                                    f"a failed call committed nothing")
+            if "loss" in r and r["loss"] != FROZEN_FAILURE_LOSS:
+                raise AnalysisError(f"typed failure row must carry frozen loss "
+                                    f"{FROZEN_FAILURE_LOSS}, got {r['loss']} ({r['failure_class']})")
+            loss = FROZEN_FAILURE_LOSS
+        else:
+            # r13 P0-13-4: the loss IS (q - y)^2 with q committed in the record
+            # and y from the settlement ledger; a self-reported loss may only
+            # confirm the derivation, never replace it
+            if "q" not in r:
+                raise AnalysisError(f"R13-4: record for {t_}/{mkt} lacks committed forecast q; "
+                                    f"losses are recomputed, never caller-supplied")
+            q = r["q"]
+            if not (isinstance(q, (int, float)) and math.isfinite(q) and 0.0 <= q <= 1.0):
+                raise AnalysisError(f"forecast q out of [0,1] or non-finite for {t_}/{mkt}: {q!r}")
+            loss = (float(q) - y_of[mkt]) ** 2
+            if "loss" in r and abs(r["loss"] - loss) > 1e-12:
+                raise AnalysisError(f"self-reported loss {r['loss']} != Brier recomputed from "
+                                    f"committed q and terminal y ({loss:.6f}) for {t_}/{mkt}")
         if mkt in seen[t_]:
             raise AnalysisError(f"duplicate market {mkt} for trajectory {t_}")
         seen[t_].add(mkt)
+        derived.append(dict(r, loss=loss))
     for t_ in expected_trajs:
         missing = set(eligible) - seen[t_]
         if missing:
@@ -299,23 +376,42 @@ def reconcile_ledgers(records: list, assignment_ledger: list,
                 f"ITT violation: randomized trajectory {t_} lacks rows for "
                 f"{len(missing)} eligible markets (e.g. {sorted(missing)[:3]}); "
                 f"failures must enter as typed frozen-loss rows, never deletions")
-    return {"eligible": eligible, "family_of": family_of, "waves": dict(waves)}
+    return {"eligible": eligible, "family_of": family_of, "waves": dict(waves),
+            "records": derived, "n_settled": len(y_of)}
 
 
 def analyze_coprimary(records: list, delta: float, alpha: float = 0.05,
                       n_boot: int = 2000, seed: int = 20260713,
                       assignment_ledger: list = None, enrollment: list = None,
-                      censoring: list = None, prereg_root_hash: str = None) -> dict:
-    """Both pinned contrasts with BONFERRONI SIMULTANEOUS CIs (R11-5): each
-    co-primary gets a percentile CI at level 1 - alpha/2, giving provable
-    simultaneous coverage >= 1 - alpha without stepdown machinery. Four-way
-    decisions read directly off these simultaneous CIs; unadjusted bootstrap
-    p-values are reported descriptively only."""
+                      censoring: list = None, prereg_root_hash: str = None,
+                      settlement: list = None, enrollment_lineage: dict = None) -> dict:
+    """Both pinned contrasts with Bonferroni NOMINAL simultaneous percentile CIs
+    (R11-5, r12): each co-primary gets a percentile CI at level 1 - alpha/2;
+    actual finite-sample coverage is certified only by the production G6
+    simulation, never claimed a priori. Four-way decisions read directly off
+    these CIs; unadjusted bootstrap p-values are reported descriptively only.
+
+    r13 hardening: the confirmatory API REQUIRES the settlement ledger (losses
+    recomputed from committed q + terminal y), the frozen prereg_root_hash
+    (whole-ledger seed-schedule regeneration), and an enrollment lineage naming
+    the source registry sha; each was previously optional and hence a bypass."""
     if assignment_ledger is None or enrollment is None:
         raise AnalysisError("R11-4: analyze_coprimary requires assignment_ledger and "
                             "enrollment (plus censoring ledger); ledger-free analysis is forbidden")
+    if settlement is None:
+        raise AnalysisError("R13-4: analyze_coprimary requires the settlement ledger; "
+                            "caller-supplied losses are forbidden")
+    if prereg_root_hash is None:
+        raise AnalysisError("R13-5: analyze_coprimary requires the frozen prereg_root_hash; "
+                            "an optional root was an auditable bypass")
+    rs = (enrollment_lineage or {}).get("registry_sha256") if isinstance(enrollment_lineage, dict) else None
+    if not (isinstance(rs, str) and len(rs) == 64 and all(ch in "0123456789abcdef" for ch in rs)):
+        raise AnalysisError("R13-6: analyze_coprimary requires enrollment_lineage "
+                            "{registry_sha256: <64-hex>} naming the family mapping's source; "
+                            "referent verification happens at the gate layer")
     led = reconcile_ledgers(records, assignment_ledger, enrollment, censoring,
-                            prereg_root_hash=prereg_root_hash)
+                            prereg_root_hash=prereg_root_hash, settlement=settlement)
+    records = led["records"]        # losses DERIVED here, never caller-supplied
     waves = led["waves"]
     m = len(CANONICAL_COPRIMARY)
     level = 1 - alpha / m                 # Bonferroni: 97.5% each for alpha=0.05
@@ -333,4 +429,8 @@ def analyze_coprimary(records: list, delta: float, alpha: float = 0.05,
             "ci_level_nominal": level, "multiplicity": "bonferroni_nominal_pending_g6",
             "ci": ci, "decision": four_way(ci[0], ci[1], delta),
         }
+    results["_provenance"] = {"prereg_root_hash": prereg_root_hash,
+                              "enrollment_registry_sha256": rs,
+                              "n_settled": led["n_settled"],
+                              "n_eligible_markets": len(led["eligible"])}
     return results

@@ -40,9 +40,18 @@ def main() -> dict:
                "topics_sha256": _hh.sha256(open(top_path, "rb").read()).hexdigest()}
     reg = {r["event_id"]: r for r in reg_lines[1:]}
     # LLM labels: prefer finished topics file, else live checkpoint
+    # r13 P0-13-3: a topics _lineage header must LINK to this registry; a
+    # label file generated from a different registry is refused, not joined
     topics = {}
     for l in open(top_path):
         o = json.loads(l)
+        if "_lineage" in o:
+            t_reg_sha = o["_lineage"].get("registry_sha256")
+            if t_reg_sha != lineage["registry_sha256"]:
+                raise SystemExit(f"R13-3: topics lineage registry_sha256 {t_reg_sha!r} != "
+                                 f"the registry actually being joined "
+                                 f"({lineage['registry_sha256']}); refusing cross-batch join")
+            continue
         topics[o["event_id"]] = o.get("topic_llm") or o.get("c")
 
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
@@ -79,12 +88,19 @@ def main() -> dict:
         })
     panel.sort(key=lambda p: -p["n_instances"])
 
-    # yield per ISO week over eligible events (G5a raw)
+    # r13 P0-13-7: settlement yield uses the UMA RESOLUTION clock, never the
+    # trading-close clock; events lacking the settlement clock are COUNTED out
+    # loud, not silently folded in (the r12 contract already banned calling a
+    # close-clock histogram "yield")
     per_week = defaultdict(int)
+    no_settlement_clock = 0
     for r in eligible_events:
-        if r["last_close"]:
-            wk = datetime.datetime.fromtimestamp(r["last_close"], datetime.timezone.utc).date().isocalendar()
+        ts = r.get("last_uma_end_binary")
+        if ts:
+            wk = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).date().isocalendar()
             per_week[f"{wk[0]}-W{wk[1]:02d}"] += 1
+        else:
+            no_settlement_clock += 1
     recent = dict(sorted(per_week.items())[-12:])
     weekly_vals = [v for k, v in sorted(per_week.items()) if k >= "2026-W17"]
     summary = {
@@ -93,9 +109,10 @@ def main() -> dict:
         "structure_hist": dict(Counter(r["structure"] for r in eligible_events)),
         "n_panel_series": len(panel),
         "panel_by_cadence": dict(Counter(p["cadence_tier"] for p in panel)),
-        "yield_recent_weeks": recent,
-        "median_eligible_events_per_week_since_W17":
+        "settlement_yield_recent_weeks_uma_end_clock": recent,
+        "median_eligible_settlements_per_week_since_W17":
             (sorted(weekly_vals)[len(weekly_vals) // 2] if weekly_vals else None),
+        "n_events_missing_settlement_clock_excluded_from_yield": no_settlement_clock,
         "labels_used": len(topics),
         "lineage": lineage,
         "stamp": stamp,

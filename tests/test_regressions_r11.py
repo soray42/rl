@@ -42,12 +42,28 @@ class TestG7aSourceBinding(unittest.TestCase):
     tampering anywhere in the chain must FAIL."""
 
     def _mk_source(self):
+        # r13 P0-13-8: the source must name a transcript_dir holding REAL bundle
+        # files (5 arms x n_questions), whose receipts re-sum to the billed
+        # tokens — self-reported shas with no referent can no longer PASS
+        import tempfile
         import uuid
-        rep = {"model": "deepseek/deepseek-v4-flash", "n_questions": 6,
+        from p1v5.checks import CANONICAL_ARMS
+        td = Path(tempfile.mkdtemp())
+        n_q = 5
+        bundles = {}
+        for arm in CANONICAL_ARMS:
+            for k in range(n_q):
+                bdoc = {"receipts": [{"purpose": "round1", "prompt_tokens": 4000,
+                                      "completion_tokens": 2000}]}
+                bb = json.dumps(bdoc).encode()
+                (td / f"{arm}_q{k}.json").write_bytes(bb)
+                bundles[f"{arm}/q{k}"] = hashlib.sha256(bb).hexdigest()
+        rep = {"model": "deepseek/deepseek-v4-flash", "n_questions": n_q,
                "billed_prompt_tokens": 100000, "billed_completion_tokens": 50000,
                "est_total_cost_usd": 0.0177,
                "billed_cost_usd": round(100000/1e6*0.09 + 50000/1e6*0.18, 4),
-               "transcript_bundles": {"a/1": "a"*64, "b/2": "b"*64}}
+               "transcript_dir": str(td),
+               "transcript_bundles": bundles}
         p = ROOT / "build" / f"tmp_src_{uuid.uuid4().hex}.json"
         p.parent.mkdir(exist_ok=True)
         p.write_text(json.dumps(rep))

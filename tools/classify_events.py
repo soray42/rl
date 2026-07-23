@@ -151,6 +151,12 @@ def main() -> dict:
             audit["eligible_downgraded"].append((r["event_id"], r["title"][:60], cat))
 
     with open(views / f"llm_topics_{stamp}.jsonl", "w") as f:
+        # r13 P0-13-3: the topics artifact NAMES its source registry (full sha),
+        # model and protocol — consumers verify the link, not the filename
+        f.write(json.dumps({"_lineage": {
+            "registry_sha256": _hh.sha256(reg.read_bytes()).hexdigest(),
+            "model": MODEL, "taxonomy": CATS,
+            "prompt_protocol": "compact_letter_v1"}}) + "\n")
         for o in out_rows:
             f.write(json.dumps(o, ensure_ascii=False) + "\n")
     summary = {

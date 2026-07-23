@@ -110,6 +110,18 @@ def main() -> dict:
     if allowed_use not in ("dev_lower_bound", "g5a_candidate"):
         raise SystemExit("R12-3: batch manifest lacks a valid allowed_use tier "
                          "(dev_lower_bound | g5a_candidate); refusing lineage-less input")
+    # r13 P0-13-2: the label is not self-declared — the consumer RE-DERIVES it
+    # from channel completeness and refuses any manifest where they disagree
+    cc = bm.get("channel_complete")
+    if not isinstance(cc, dict) or not isinstance(cc.get("incomplete_reasons"), list):
+        raise SystemExit("R13-2: batch manifest lacks channel_complete.incomplete_reasons; "
+                         "allowed_use cannot be machine-verified")
+    derived_use = ("g5a_candidate" if not cc["incomplete_reasons"] and not cc.get("overrides")
+                   else "dev_lower_bound")
+    if allowed_use != derived_use:
+        raise SystemExit(f"R13-2: allowed_use={allowed_use} contradicts machine derivation "
+                         f"({derived_use}) from channel_complete "
+                         f"(reasons={cc['incomplete_reasons']}, overrides={cc.get('overrides', [])})")
     bm_sha = hashlib.sha256(open(bm_path, "rb").read()).hexdigest()
     if allowed_use == "dev_lower_bound":
         print("WARNING: dev_lower_bound batch (known-incomplete pull) — this registry is "
@@ -147,18 +159,26 @@ def main() -> dict:
         # R11-3: settlement REQUIRES uma resolution + a terminal outcome;
         # closed_time alone is just trading close (collector contract L103-121)
         settled = [m for m in mkts if is_settled(m)]
+        bsettled = [m for m in mkts if is_settled_binary(m)]
         row = {
             "event_id": eid,
             "title": title,
             "n_markets": len(mkts),
             "n_settled": len(settled),
-            "n_settled_binary": sum(1 for m in mkts if is_settled_binary(m)),
+            "n_settled_binary": len(bsettled),
             "structure": classify_structure(
                 {"neg_risk": meta.get("neg_risk"), "title": title}, mkts),
             "topic": topic_class(meta.get("tags")),
             "tags": meta.get("tags") or [],
             "series_key": series_key(title),
-            "last_close": max((m["closed_time"] for m in settled), default=None),
+            # r13 P0-13-7 two clocks, both over BINARY settled rows only:
+            # last_close = trading-close clock (cadence/series spacing ONLY,
+            # never yield); last_uma_end_binary = uma resolution clock — the
+            # only clock settlement yield may legitimately consume
+            "last_close": max((m["closed_time"] for m in bsettled
+                               if m.get("closed_time")), default=None),
+            "last_uma_end_binary": max((m["uma_end"] for m in bsettled
+                                        if m.get("uma_end")), default=None),
             "volume": meta.get("volume"),
         }
         rows.append(row)

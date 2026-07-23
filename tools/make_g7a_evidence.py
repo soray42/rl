@@ -24,6 +24,18 @@ def main() -> int:
         print("G7a source lacks transcript_bundles (receipts); run a fresh live micro-pilot "
               "under the bundle-persisting pipeline before emitting G7a evidence. NOT emitting.")
         return 2
+    # r13 P0-13-8: mirror the runner — bundle FILES must exist and re-hash to
+    # the recorded shas before evidence is even emitted
+    if not r.get("transcript_dir"):
+        print("G7a source lacks transcript_dir; bundles unlocatable. NOT emitting.")
+        return 2
+    td = ROOT / r["transcript_dir"]
+    for key, sha in sorted(r["transcript_bundles"].items()):
+        arm, _, qid = key.partition("/")
+        bpath = td / f"{arm}_{qid}.json"
+        if not bpath.exists() or hashlib.sha256(bpath.read_bytes()).hexdigest() != sha:
+            print(f"G7a bundle missing or sha-mismatched on disk: {key}. NOT emitting.")
+            return 2
     rb = hashlib.sha256(json.dumps(sorted(r["transcript_bundles"].values())).encode()).hexdigest()
     est, act = r["est_total_cost_usd"], r["billed_cost_usd"]
     err_pct = abs(est - act) / act * 100

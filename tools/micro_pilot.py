@@ -29,9 +29,15 @@ PRICE_OUT_PER_MTOK = {"stub-1": 0.0, "deepseek/deepseek-v4-flash": 0.18}
 CHARS_PER_TOKEN = 2.43   # calibrated from first live dry-run: 405,078 chars / 166,919 billed tokens
 HARD_CAP_USD = 5.0
 
+# P1-13-1: module-level dirs so tests can redirect to fixtures — the suite's
+# green must be a property of the COMMIT, never of this machine's data/
+VIEWS_DIR = ROOT / "data/views"
+TRANSCRIPTS_DIR = ROOT / "data/transcripts"
+BUILD_DIR = ROOT / "build"
+
 
 def load_questions(n: int) -> list:
-    views = sorted((ROOT / "data/views").glob("two_clock_view_*.jsonl"))
+    views = sorted(VIEWS_DIR.glob("two_clock_view_*.jsonl"))
     if not views:
         raise SystemExit("no collected data; run collector first")
     qs, seen_events = [], set()
@@ -64,8 +70,12 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
     report = {"mode": mode, "model": model, "n_questions": len(questions),
               "epistemic_status": "DEV_NONCAUSAL",   # R11-9: retrospective, never effect evidence
               "arms": {}, "receipt_chars_total": 0, "transcript_bundles": {}}
-    tdir = ROOT / "data/transcripts" / datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
+    tdir = TRANSCRIPTS_DIR / datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
     tdir.mkdir(parents=True, exist_ok=True)
+    # r13 P0-13-8: the report NAMES its bundle directory so G7a can open and
+    # re-hash every persisted bundle instead of trusting self-reported shas
+    report["transcript_dir"] = (str(tdir.relative_to(ROOT))
+                                if tdir.is_relative_to(ROOT) else str(tdir))
     for arm in CANONICAL_ARMS:
         team = TeamDeliberation(backend, n_agents)
         memory = MemoryState()
@@ -136,8 +146,8 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
                                "chars": chars, "est_cost_usd": round(est_cost, 4)}
         report["receipt_chars_total"] += chars
         # per-arm checkpoint: a timeout kill never loses completed arms
-        ckpt = ROOT / "build" / f"micro_pilot_{mode}_partial.json"
-        ckpt.parent.mkdir(exist_ok=True)
+        ckpt = BUILD_DIR / f"micro_pilot_{mode}_partial.json"
+        ckpt.parent.mkdir(parents=True, exist_ok=True)
         ckpt.write_text(json.dumps(report, indent=2, ensure_ascii=False))
         if mode == "live" and sum(a["est_cost_usd"] for a in report["arms"].values()) > HARD_CAP_USD:
             raise SystemExit("hard cap reached; aborting live pilot")
@@ -146,8 +156,8 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
         report.get("billed_prompt_tokens", 0) / 1e6 * PRICE_IN_PER_MTOK[model]
         + report.get("billed_completion_tokens", 0) / 1e6 * PRICE_OUT_PER_MTOK[model], 4)
     report["produced_at_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-    out = ROOT / "build" / f"micro_pilot_{mode}.json"
-    out.parent.mkdir(exist_ok=True)
+    out = BUILD_DIR / f"micro_pilot_{mode}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     return report
 

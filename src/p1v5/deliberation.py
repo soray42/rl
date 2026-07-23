@@ -40,6 +40,8 @@ class CallReceipt:
     prompt_tokens: int = 0        # provider-billed actuals (0 for stub)
     completion_tokens: int = 0
     provider: str = ""            # which upstream served the call (routing receipt)
+    failure_class: str = ""       # r13 P0-13-9: persisted failure SEMANTICS —
+                                  # timeout vs provider_failure must differ in the bundle
 
 
 @dataclass(frozen=True)
@@ -177,7 +179,10 @@ class OpenRouterBackend:
         # will yield no vote and the scoring fallback handles it honestly
         try:
             text = out["choices"][0]["message"].get("content") or ""
-        except (KeyError, IndexError, TypeError) as e:   # R12: HTTP-200 empty/odd body is typed
+        # R12 + r13 P0-13-9: EVERY legal-JSON-but-wrong-shape body is typed —
+        # message:null / non-object message raise AttributeError, which round-12
+        # left uncaught (trajectory death path)
+        except (KeyError, IndexError, TypeError, AttributeError) as e:
             raise BackendFailure("invalid_parse") from e
         usage = out.get("usage") or {}
         receipt = CallReceipt(self.name, model, purpose,
@@ -231,7 +236,8 @@ class TeamDeliberation:
             except BackendFailure as bf:      # R11-7: typed, never trajectory-fatal
                 t.receipts.append(CallReceipt("failed", "-", "round1",
                                               hashlib.sha256(prompt.encode()).hexdigest(),
-                                              "0"*64, len(prompt), 0, 0))
+                                              "0"*64, len(prompt), 0, 0,
+                                              failure_class=bf.failure_class))
                 t.messages.append(Message(aid, 1, f"[FAILURE:{bf.failure_class}]"))
                 continue
             t.receipts.append(rec)
@@ -247,7 +253,8 @@ class TeamDeliberation:
             except BackendFailure as bf:
                 t.receipts.append(CallReceipt("failed", "-", "round2",
                                               hashlib.sha256(prompt.encode()).hexdigest(),
-                                              "0"*64, len(prompt), 0, 0))
+                                              "0"*64, len(prompt), 0, 0,
+                                              failure_class=bf.failure_class))
                 t.messages.append(Message(aid, 2, f"[FAILURE:{bf.failure_class}]"))
                 t.votes[aid] = None
                 continue
@@ -281,7 +288,7 @@ class TeamDeliberation:
                 transcript.receipts.append(CallReceipt(
                     "failed", "-", "c3_rollout",
                     hashlib.sha256(prompt.encode()).hexdigest(), "0" * 64,
-                    len(prompt), 0, 0))
+                    len(prompt), 0, 0, failure_class=bf.failure_class))
                 continue
             transcript.receipts.append(rec)
             v = parse_probability(text)

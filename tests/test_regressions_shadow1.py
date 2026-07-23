@@ -45,20 +45,29 @@ class TestBootstrapTrajectoryWeight(unittest.TestCase):
 
 class TestPilotQuestionDedup(unittest.TestCase):
     def test_one_market_per_event(self):
+        # P1-13-1: hermetic — synthetic view with sibling markets from ONE
+        # event; the dedup property is a commit property, not a data property
         sys.path.insert(0, str(ROOT / "tools"))
         import json
-        from micro_pilot import load_questions
-        views = sorted((ROOT / "data/views").glob("two_clock_view_*.jsonl"))
-        if not views:
-            self.skipTest("no collected data")
-        qs = load_questions(6)
-        by_event = {}
-        for line in views[-1].read_text().splitlines():
-            v = json.loads(line)
-            by_event[v["market_id"]] = tuple(sorted(v["event_ids"] or []))
-        events = [by_event.get(q["question_id"]) for q in qs]
-        self.assertEqual(len(events), len(set(events)),
-                         f"sibling markets from one event in pilot set: {events}")
+        import tempfile
+        from unittest import mock
+        import micro_pilot
+        tmp = Path(tempfile.mkdtemp())
+        rows = [{"market_id": "m1", "question": "q1?", "uma_status": "resolved",
+                 "outcome_gamma_coarse": "yes", "neg_risk": False,
+                 "event_ids": ["EV_SHARED"], "closed_time": 100},
+                {"market_id": "m2", "question": "q2?", "uma_status": "resolved",
+                 "outcome_gamma_coarse": "no", "neg_risk": False,
+                 "event_ids": ["EV_SHARED"], "closed_time": 200},   # sibling — must drop
+                {"market_id": "m3", "question": "q3?", "uma_status": "resolved",
+                 "outcome_gamma_coarse": "no", "neg_risk": False,
+                 "event_ids": ["EV_OTHER"], "closed_time": 300}]
+        (tmp / "two_clock_view_fixture.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in rows))
+        with mock.patch.object(micro_pilot, "VIEWS_DIR", tmp):
+            qs = micro_pilot.load_questions(6)
+        self.assertEqual([q["question_id"] for q in qs], ["m1", "m3"],
+                         "sibling market from one event leaked into pilot set")
 
 
 if __name__ == "__main__":
