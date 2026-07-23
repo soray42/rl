@@ -76,14 +76,20 @@ def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000)
         except Exception as exc:
             print(f"    keyset page {page} error ({exc}); INCOMPLETE", flush=True)
             return out, False
-        with open(ledger_path, "a") as lf:
-            lf.write(json.dumps({
-                "page": page, "kind": kind,
-                "incoming_cursor_sha": hashlib.sha256((after or "").encode()).hexdigest()[:16],
-                "next_cursor_sha": hashlib.sha256((nxt or "").encode()).hexdigest()[:16],
-                "response_sha": sha, "n": len(ids),
-                "first_id": ids[0] if ids else None, "last_id": ids[-1] if ids else None,
-            }) + "\n")
+        try:
+            with open(ledger_path, "a") as lf:
+                lf.write(json.dumps({
+                    "page": page, "kind": kind,
+                    "incoming_cursor_sha": hashlib.sha256((after or "").encode()).hexdigest()[:16],
+                    "next_cursor_sha": hashlib.sha256((nxt or "").encode()).hexdigest()[:16],
+                    "response_sha": sha, "n": len(ids),
+                    "first_id": ids[0] if ids else None, "last_id": ids[-1] if ids else None,
+                }) + "\n")
+        except Exception as exc:
+            # R12-2 contract: a ledger that cannot be written = an unauditable
+            # page = INCOMPLETE channel, never a crash and never a silent skip
+            print(f"    keyset page {page}: ledger write failed ({exc}); INCOMPLETE", flush=True)
+            return out, False
         if sha in seen_pages:
             print(f"    keyset page {page}: repeat response, INCOMPLETE", flush=True)
             return out, False
@@ -101,7 +107,11 @@ def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000)
         # numeric-id monotonicity is ADVISORY only (cursor is opaque; no order
         # guarantee in the contract) — the binding guards are page-sha repeat,
         # cursor non-advance and cross-page duplicate ids above
-        _archive(kind, url, raw)
+        try:
+            _archive(kind, url, raw)
+        except Exception as exc:
+            print(f"    keyset page {page}: archive write failed ({exc}); INCOMPLETE", flush=True)
+            return out, False
         out.extend(batch)
         if page % 100 == 0:
             print(f"    keyset page {page}: cum {len(out)}", flush=True)

@@ -76,8 +76,15 @@ EVIDENCE_SCHEMAS = {
                             ["cost_usd_estimate", "cost_error_pct", "n_dry_run_events",
                              "source_report_sha256", "pricing_table_sha256",
                              "receipt_bundle_sha256"]),
-    "G5a": _evidence_schema({"independent_family_transitions": _NONNEG_INT, "required_by_g6": _POS_INT},
-                            ["independent_family_transitions", "required_by_g6"]),
+    # shadow r3 (P0-12-3 core): G5a evidence must CARRY its batch lineage and the
+    # allowed_use tier is pinned by const — a dev_lower_bound batch structurally
+    # cannot produce schema-valid G5a evidence
+    "G5a": _evidence_schema({"independent_family_transitions": _NONNEG_INT, "required_by_g6": _POS_INT,
+                             "batch_allowed_use": {"const": "g5a_candidate"},
+                             "batch_manifest_sha256": _HEX64,
+                             "registry_sha256": _HEX64},
+                            ["independent_family_transitions", "required_by_g6",
+                             "batch_allowed_use", "batch_manifest_sha256", "registry_sha256"]),
     "G6": _evidence_schema({"type1_ucb": _UNIT, "power_lcb": _UNIT, "n_sims": _POS_INT,
                             "delta_frozen_sha256": _HEX64},
                            ["type1_ucb", "power_lcb", "n_sims", "delta_frozen_sha256"]),
@@ -108,7 +115,8 @@ def _verdict_rules(manifest):
         "G4": lambda x: x["replay_fidelity"] >= 0.90 and x["n_replayed"] >= 10,
         "G7a": lambda x: (x["cost_error_pct"] <= 20 and x["n_dry_run_events"] >= 5
                           and x["cost_usd_estimate"] <= llm_cap),
-        "G5a": lambda x: x["independent_family_transitions"] >= x["required_by_g6"],
+        "G5a": lambda x: (x["independent_family_transitions"] >= x["required_by_g6"]
+                          and x["batch_allowed_use"] == "g5a_candidate"),
         "G6": lambda x: (x["type1_ucb"] <= alpha and x["power_lcb"] >= 0.80
                          and x["n_sims"] >= 1000),
         "G5b": lambda x: x["calendar_ok"] is True and x["weeks_required"] <= 52,

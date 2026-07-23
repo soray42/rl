@@ -25,7 +25,20 @@ def main() -> dict:
     top_path = _os.environ.get("P1V5_TOPICS")
     if not reg_path or not top_path:
         raise SystemExit("R12: set P1V5_REGISTRY and P1V5_TOPICS explicitly; implicit latest is forbidden")
-    reg = {json.loads(l)["event_id"]: json.loads(l) for l in open(reg_path)}
+    reg_lines = [json.loads(l) for l in open(reg_path)]
+    # shadow r3 (P0-12-3 core): a registry without a _lineage header has lost its
+    # batch provenance and can feed nothing downstream — fail closed
+    if not reg_lines or "_lineage" not in reg_lines[0]:
+        raise SystemExit("shadow-r3: registry lacks the _lineage header (batch_manifest_sha256/"
+                         "allowed_use); rebuild it with tools/event_registry.py — lineage-less "
+                         "registries are forbidden downstream")
+    lin = reg_lines[0]["_lineage"]
+    import hashlib as _hh
+    lineage = {"batch_manifest_sha256": lin["batch_manifest_sha256"],
+               "batch_allowed_use": lin["allowed_use"],
+               "registry_sha256": _hh.sha256(open(reg_path, "rb").read()).hexdigest(),
+               "topics_sha256": _hh.sha256(open(top_path, "rb").read()).hexdigest()}
+    reg = {r["event_id"]: r for r in reg_lines[1:]}
     # LLM labels: prefer finished topics file, else live checkpoint
     topics = {}
     for l in open(top_path):
@@ -36,7 +49,9 @@ def main() -> dict:
     eligible_events = []
     for eid, r in reg.items():
         cat = topics.get(eid)
-        if cat in ELIGIBLE and r["n_settled"] > 0:
+        # shadow r3: eligibility needs a BINARY settled endpoint (n_settled also
+        # counts unknown_50_50, which the primary Brier endpoint cannot consume)
+        if cat in ELIGIBLE and r["n_settled_binary"] > 0:
             r = dict(r, topic_llm=cat)
             eligible_events.append(r)
 
@@ -82,6 +97,7 @@ def main() -> dict:
         "median_eligible_events_per_week_since_W17":
             (sorted(weekly_vals)[len(weekly_vals) // 2] if weekly_vals else None),
         "labels_used": len(topics),
+        "lineage": lineage,
         "stamp": stamp,
     }
     (VIEWS / f"panel_v2_{stamp}.json").write_text(

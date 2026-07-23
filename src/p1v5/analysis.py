@@ -214,7 +214,8 @@ FROZEN_FAILURE_LOSS = 1.0     # manifest estimand.endpoint.failure_loss (schema 
 
 
 def reconcile_ledgers(records: list, assignment_ledger: list,
-                      enrollment: list, censoring: list = None) -> dict:
+                      enrollment: list, censoring: list = None,
+                      prereg_root_hash: str = None) -> dict:
     """R12 (P0-12-4/5): TYPED ledgers with scientific semantics, not bare lists.
     - assignment rows need trajectory_id/arm/wave/index/seed; duplicate ids fatal;
     - enrollment rows need market_id + family_id: the family MAPPING lives here,
@@ -241,6 +242,18 @@ def reconcile_ledgers(records: list, assignment_ledger: list,
     for w, arms_ in waves.items():
         if sorted(arms_) != sorted(CANONICAL_ARMS):
             raise AnalysisError(f"wave {w} incomplete: arms {sorted(arms_)}")
+    if prereg_root_hash is not None:
+        # shadow r3 (R3-NEW-2): seeds/arms are only trustworthy if the WHOLE
+        # ledger regenerates from the frozen seed schedule — hand-picked seeds
+        # (run many, keep the favorite, backfill the ledger) fail here
+        expected = assign_trajectories(prereg_root_hash, k_per_arm=len(waves))
+        keys = ("trajectory_id", "index", "wave", "arm", "seed")
+        got = sorted(({k: e[k] for k in keys} for e in assignment_ledger),
+                     key=lambda e: e["index"])
+        if got != sorted(expected, key=lambda e: e["index"]):
+            raise AnalysisError("assignment ledger does not regenerate from the frozen seed "
+                                "schedule (root|assign / root|traj domains); seeds or arm "
+                                "permutations were altered after randomization")
     family_of = {}
     for e in enrollment or []:
         if not isinstance(e, dict) or "market_id" not in e or "family_id" not in e:
@@ -292,7 +305,7 @@ def reconcile_ledgers(records: list, assignment_ledger: list,
 def analyze_coprimary(records: list, delta: float, alpha: float = 0.05,
                       n_boot: int = 2000, seed: int = 20260713,
                       assignment_ledger: list = None, enrollment: list = None,
-                      censoring: list = None) -> dict:
+                      censoring: list = None, prereg_root_hash: str = None) -> dict:
     """Both pinned contrasts with BONFERRONI SIMULTANEOUS CIs (R11-5): each
     co-primary gets a percentile CI at level 1 - alpha/2, giving provable
     simultaneous coverage >= 1 - alpha without stepdown machinery. Four-way
@@ -301,7 +314,8 @@ def analyze_coprimary(records: list, delta: float, alpha: float = 0.05,
     if assignment_ledger is None or enrollment is None:
         raise AnalysisError("R11-4: analyze_coprimary requires assignment_ledger and "
                             "enrollment (plus censoring ledger); ledger-free analysis is forbidden")
-    led = reconcile_ledgers(records, assignment_ledger, enrollment, censoring)
+    led = reconcile_ledgers(records, assignment_ledger, enrollment, censoring,
+                            prereg_root_hash=prereg_root_hash)
     waves = led["waves"]
     m = len(CANONICAL_COPRIMARY)
     level = 1 - alpha / m                 # Bonferroni: 97.5% each for alpha=0.05

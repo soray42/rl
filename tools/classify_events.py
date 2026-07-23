@@ -42,6 +42,12 @@ LETTER = {c: chr(97 + i) for i, c in enumerate(CATS)}     # a..k
 UNLETTER = {v: k for k, v in LETTER.items()}
 
 
+def load_rows(reg_path) -> list:
+    """Registry rows minus the _lineage header (shadow r3: registries now open
+    with a lineage record; event consumers must skip it, never classify it)."""
+    return [o for o in (json.loads(l) for l in open(reg_path)) if "_lineage" not in o]
+
+
 def build_prompt(items: list) -> str:
     lines = "\n".join(f"{i}: {t[:110]}" for i, t in items)
     legend = ", ".join(f"{LETTER[c]}={c}" for c in CATS)
@@ -71,7 +77,7 @@ def main() -> dict:
     if not reg_path:
         raise SystemExit("R12: set P1V5_REGISTRY=<event_registry_*.jsonl>; implicit latest is forbidden")
     reg = Path(reg_path)
-    rows = [json.loads(l) for l in open(reg)]
+    rows = load_rows(reg)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
     backend = OpenRouterBackend(MODEL, provider_pin=None)  # 分类≠实验:解钉换吞吐
 

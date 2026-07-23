@@ -11,6 +11,7 @@ hence auditable and frozen with the repo.
 """
 
 import datetime
+import hashlib
 import json
 import re
 import sys
@@ -18,6 +19,24 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+VIEWS = ROOT / "data/views"          # module-level so tests can redirect output
+
+TERMINAL_OUTCOMES = ("yes", "no", "unknown_50_50")
+BINARY_OUTCOMES = ("yes", "no")
+
+
+def is_settled(m: dict) -> bool:
+    """R11-3 production predicate: settlement REQUIRES uma resolution + a
+    terminal outcome; closed_time alone is just trading close."""
+    return (m.get("uma_status") == "resolved"
+            and m.get("outcome_gamma_coarse") in TERMINAL_OUTCOMES)
+
+
+def is_settled_binary(m: dict) -> bool:
+    """Settled with a BINARY outcome — the only rows the primary Brier endpoint
+    can consume; unknown_50_50 counts as settled but never as panel material."""
+    return (m.get("uma_status") == "resolved"
+            and m.get("outcome_gamma_coarse") in BINARY_OUTCOMES)
 
 TOPIC_WHITELIST = {"politics", "finance", "elections", "equities", "economy", "fed",
                    "geopolitics", "world", "macro-indicators", "macro-graph",
@@ -78,13 +97,23 @@ def topic_class(tags):
 
 
 def main() -> dict:
-    views = ROOT / "data/views"
+    views = VIEWS
     import os as _os
     bm_path = _os.environ.get("P1V5_BATCH_MANIFEST")
     if not bm_path:
         raise SystemExit("R11-2: set P1V5_BATCH_MANIFEST=<path to batch_manifest_*.json>; "
                          "implicit latest-file selection is forbidden")
     bm = json.loads(open(bm_path).read())
+    # shadow r3 (P0-12-3 core): allowed_use must be CONSUMED, and lineage must
+    # survive into the registry so downstream can never lose it
+    allowed_use = bm.get("allowed_use")
+    if allowed_use not in ("dev_lower_bound", "g5a_candidate"):
+        raise SystemExit("R12-3: batch manifest lacks a valid allowed_use tier "
+                         "(dev_lower_bound | g5a_candidate); refusing lineage-less input")
+    bm_sha = hashlib.sha256(open(bm_path, "rb").read()).hexdigest()
+    if allowed_use == "dev_lower_bound":
+        print("WARNING: dev_lower_bound batch (known-incomplete pull) — this registry is "
+              "DEV-ONLY; the G5a evidence path structurally rejects it", flush=True)
     mkey = next(k for k in bm["files"] if k.endswith("_markets.jsonl"))
     ekey = next(k for k in bm["files"] if k.endswith("_events.jsonl"))
     mfile = views / mkey
@@ -117,14 +146,13 @@ def main() -> dict:
         title = meta.get("title") or (mkts[0].get("question") or "")
         # R11-3: settlement REQUIRES uma resolution + a terminal outcome;
         # closed_time alone is just trading close (collector contract L103-121)
-        settled = [m for m in mkts
-                   if m.get("uma_status") == "resolved"
-                   and m.get("outcome_gamma_coarse") in ("yes", "no", "unknown_50_50")]
+        settled = [m for m in mkts if is_settled(m)]
         row = {
             "event_id": eid,
             "title": title,
             "n_markets": len(mkts),
             "n_settled": len(settled),
+            "n_settled_binary": sum(1 for m in mkts if is_settled_binary(m)),
             "structure": classify_structure(
                 {"neg_risk": meta.get("neg_risk"), "title": title}, mkts),
             "topic": topic_class(meta.get("tags")),
@@ -134,11 +162,21 @@ def main() -> dict:
             "volume": meta.get("volume"),
         }
         rows.append(row)
-        if row["topic"] == "eligible" and row["n_settled"] > 0:
+        # shadow r3: series admission requires a BINARY settled endpoint;
+        # unknown_50_50-only events stay in the registry but never in the panel
+        if row["topic"] == "eligible" and row["n_settled_binary"] > 0:
             series_map[row["series_key"]].append(row)
 
     out = views / f"event_registry_{stamp}.jsonl"
+    lineage = {"_lineage": {"batch_id": bm.get("batch_id"),
+                            "batch_manifest_sha256": bm_sha,
+                            "allowed_use": allowed_use,
+                            "source_markets": mfile.name,
+                            "source_events": efile.name}}
     with open(out, "w") as f:
+        # first line = lineage header: downstream consumers refuse registries
+        # without it, so batch provenance can never be physically lost
+        f.write(json.dumps(lineage, ensure_ascii=False) + "\n")
         for r in sorted(rows, key=lambda r: r["event_id"]):
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
@@ -170,8 +208,9 @@ def main() -> dict:
             r["structure"] for r in rows if r["topic"] == "eligible")),
         "n_recurring_series_eligible": len(panel),
         "panel_top30": panel[:30],
-        "registry_path": str(out.relative_to(ROOT)),
+        "registry_path": str(out.relative_to(ROOT)) if out.is_relative_to(ROOT) else str(out),
         "source_markets": mfile.name, "source_events": efile.name,
+        "batch_manifest_sha256": bm_sha, "batch_allowed_use": allowed_use,
     }
     (views / f"event_registry_{stamp}_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False))
