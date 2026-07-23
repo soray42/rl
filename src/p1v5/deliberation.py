@@ -175,7 +175,10 @@ class OpenRouterBackend:
         # providers occasionally return content=None (empty/refusal/reasoning-only);
         # that is a typed empty output, NOT a crash — parse_probability(None-safe "")
         # will yield no vote and the scoring fallback handles it honestly
-        text = out["choices"][0]["message"].get("content") or ""
+        try:
+            text = out["choices"][0]["message"].get("content") or ""
+        except (KeyError, IndexError, TypeError) as e:   # R12: HTTP-200 empty/odd body is typed
+            raise BackendFailure("invalid_parse") from e
         usage = out.get("usage") or {}
         receipt = CallReceipt(self.name, model, purpose,
                               hashlib.sha256(prompt.encode()).hexdigest(),
@@ -226,8 +229,9 @@ class TeamDeliberation:
             try:
                 text, rec = self.backend.complete(prompt, seed + i, "round1")
             except BackendFailure as bf:      # R11-7: typed, never trajectory-fatal
-                t.receipts.append(CallReceipt("failed", "-", "round1", "0"*64, "0"*64,
-                                              len(prompt), 0, 0))
+                t.receipts.append(CallReceipt("failed", "-", "round1",
+                                              hashlib.sha256(prompt.encode()).hexdigest(),
+                                              "0"*64, len(prompt), 0, 0))
                 t.messages.append(Message(aid, 1, f"[FAILURE:{bf.failure_class}]"))
                 continue
             t.receipts.append(rec)
@@ -241,8 +245,9 @@ class TeamDeliberation:
             try:
                 text, rec = self.backend.complete(prompt, seed + 100 + i, "round2")
             except BackendFailure as bf:
-                t.receipts.append(CallReceipt("failed", "-", "round2", "0"*64, "0"*64,
-                                              len(prompt), 0, 0))
+                t.receipts.append(CallReceipt("failed", "-", "round2",
+                                              hashlib.sha256(prompt.encode()).hexdigest(),
+                                              "0"*64, len(prompt), 0, 0))
                 t.messages.append(Message(aid, 2, f"[FAILURE:{bf.failure_class}]"))
                 t.votes[aid] = None
                 continue
@@ -270,7 +275,14 @@ class TeamDeliberation:
         for i, aid in enumerate(self._agent_ids()):
             prompt = materialize_prompt(question, evidence_slices[i], retrieved,
                                         history, aid, "counterfactual re-vote")
-            text, rec = self.backend.complete(prompt, seed + 200 + i, "c3_rollout")
+            try:
+                text, rec = self.backend.complete(prompt, seed + 200 + i, "c3_rollout")
+            except BackendFailure as bf:      # R12 (P0-12-7): C3 path is typed too
+                transcript.receipts.append(CallReceipt(
+                    "failed", "-", "c3_rollout",
+                    hashlib.sha256(prompt.encode()).hexdigest(), "0" * 64,
+                    len(prompt), 0, 0))
+                continue
             transcript.receipts.append(rec)
             v = parse_probability(text)
             if v is not None:

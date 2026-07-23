@@ -38,7 +38,8 @@ def synth_records(effect_c1: float, effect_c2: float, n_fam: int = 12,
                                 "arm": entry["arm"], "family_id": fam,
                                 "market_id": f"{fam}-m{mkt}", "loss": loss})
     if with_ledgers:
-        enrollment = [f"fam-{i}-m{k}" for i in range(n_fam) for k in range(2)]
+        enrollment = [{"market_id": f"fam-{i}-m{k}", "family_id": f"fam-{i}"}
+                      for i in range(n_fam) for k in range(2)]
         return records, ledger, enrollment
     return records
 
@@ -67,7 +68,7 @@ class TestEstimator(unittest.TestCase):
                 {"trajectory_id": "t1", "arm": "shared_surplus", "family_id": "f",
                  "market_id": "m2", "loss": 0.2}]
         with self.assertRaises(AnalysisError):
-            contrast_tau(recs, "no_update", "shared_surplus")
+            contrast_tau(recs, "no_update", "shared_surplus", waves={0: {}})
 
     def test_four_way_regions(self):
         self.assertEqual(four_way(-0.10, -0.05, 0.02), "meaningful_benefit")
@@ -125,8 +126,8 @@ class TestPlantedDecisions(unittest.TestCase):
                              k_per_arm=6, fam_sd=0.04, noise_sd=0.03, with_ledgers=True)
         out = analyze_coprimary(recs, delta=0.001, n_boot=400, seed=14, assignment_ledger=led, enrollment=enr)
         for cid in ("C1", "C2"):
-            self.assertEqual(out[cid]["multiplicity"], "bonferroni_simultaneous")
-            self.assertAlmostEqual(out[cid]["ci_level"], 0.975)
+            self.assertEqual(out[cid]["multiplicity"], "bonferroni_nominal_pending_g6")
+            self.assertAlmostEqual(out[cid]["ci_level_nominal"], 0.975)
 
 
 if __name__ == "__main__":

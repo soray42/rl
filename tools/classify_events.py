@@ -66,12 +66,18 @@ def parse_reply(text: str, expect: set) -> dict:
 
 def main() -> dict:
     views = ROOT / "data/views"
-    reg = sorted(views.glob("event_registry_*.jsonl"))[-1]
+    import os as _os
+    reg_path = _os.environ.get("P1V5_REGISTRY")
+    if not reg_path:
+        raise SystemExit("R12: set P1V5_REGISTRY=<event_registry_*.jsonl>; implicit latest is forbidden")
+    reg = Path(reg_path)
     rows = [json.loads(l) for l in open(reg)]
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
     backend = OpenRouterBackend(MODEL, provider_pin=None)  # 分类≠实验:解钉换吞吐
 
-    ckpt_path = views / "llm_topics_checkpoint.jsonl"
+    import hashlib as _hh
+    reg_sha8 = _hh.sha256(reg.read_bytes()).hexdigest()[:8]
+    ckpt_path = views / f"llm_topics_checkpoint_{reg_sha8}.jsonl"   # batch-identity-bound
     done_ids = {}
     if ckpt_path.exists():
         for line in open(ckpt_path):

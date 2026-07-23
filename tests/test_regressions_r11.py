@@ -38,20 +38,40 @@ class TestTranscriptProvenanceSHA(unittest.TestCase):
 
 
 class TestG7aSourceBinding(unittest.TestCase):
-    """P0-11-5: evidence without a recomputable source report must FAIL."""
+    """P0-11-5 + P0-12-8: evidence binds to a recomputable source WITH receipts;
+    tampering anywhere in the chain must FAIL."""
 
-    def _eval(self, metrics_patch=None):
+    def _mk_source(self):
+        import uuid
+        rep = {"model": "deepseek/deepseek-v4-flash", "n_questions": 6,
+               "billed_prompt_tokens": 100000, "billed_completion_tokens": 50000,
+               "est_total_cost_usd": 0.0177,
+               "billed_cost_usd": round(100000/1e6*0.09 + 50000/1e6*0.18, 4),
+               "transcript_bundles": {"a/1": "a"*64, "b/2": "b"*64}}
+        p = ROOT / "build" / f"tmp_src_{uuid.uuid4().hex}.json"
+        p.parent.mkdir(exist_ok=True)
+        p.write_text(json.dumps(rep))
+        return p, rep
+
+    def _eval(self, metrics_patch=None, source_patch=None):
+        from p1v5 import gate_runner
         from p1v5.gate_runner import eval_evidence_gate
-        src = ROOT / "evidence_src/micro_pilot_live.json"
+        src, rep = self._mk_source()
+        if source_patch:
+            rep.update(source_patch)
+            src.write_text(json.dumps(rep))
         prc = ROOT / "evidence_src/pricing_v1.json"
-        rep = json.loads(src.read_text())
         est, act = rep["est_total_cost_usd"], rep["billed_cost_usd"]
+        rb = hashlib.sha256(json.dumps(sorted(rep["transcript_bundles"].values())).encode()).hexdigest()
         metrics = {"cost_usd_estimate": est,
                    "cost_error_pct": round(abs(est - act) / act * 100, 2),
                    "n_dry_run_events": rep["n_questions"],
                    "source_report_sha256": hashlib.sha256(src.read_bytes()).hexdigest(),
-                   "pricing_table_sha256": hashlib.sha256(prc.read_bytes()).hexdigest()}
+                   "pricing_table_sha256": hashlib.sha256(prc.read_bytes()).hexdigest(),
+                   "receipt_bundle_sha256": rb}
         metrics.update(metrics_patch or {})
+        self._src_override = src
+        gate_runner.G7A_SOURCE_PATH = src
         doc = {"produced_by": "r11-test", "produced_at_utc": "2026-07-22T00:00:00+00:00",
                "inputs": {"manifest_sha256": "b" * 64, "input_lock_sha256": "c" * 64},
                "metrics": metrics, "verdict": "PASS"}
@@ -64,6 +84,10 @@ class TestG7aSourceBinding(unittest.TestCase):
                                       "b" * 64, "c" * 64)
         finally:
             p.unlink()
+            self._src_override.unlink()
+            import importlib
+            from p1v5 import gate_runner as gr
+            gr.G7A_SOURCE_PATH = gr.ROOT / "evidence_src/micro_pilot_live.json"
 
     def test_correct_binding_passes(self):
         self.assertEqual(self._eval()["status"], "PASS")

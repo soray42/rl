@@ -11,6 +11,7 @@ Prints a yield summary: settled independent events per ISO week (G5a raw input).
 """
 
 import datetime
+import hashlib
 import json
 import sys
 from collections import Counter, defaultdict
@@ -24,12 +25,37 @@ from p1v5.collector import DATA, PAGE_LIMIT, _archive, _get, two_clock_view  # n
 ELIGIBILITY_LINE = "2026-04-24"      # deepseek-v4-flash release date (conservative cutoff)
 
 
+def fetch_all(path: str, base_params: dict, kind: str, max_pages: int = 22) -> tuple:
+    """Offset pagination with cap detection. Returns (records, hit_cap)."""
+    out = []
+    for page in range(max_pages):
+        params = dict(base_params, limit=PAGE_LIMIT, offset=page * PAGE_LIMIT)
+        try:
+            url, raw = _get(path, params)
+        except Exception as exc:
+            print(f"    page {page} error ({exc}); treating as cap", flush=True)
+            return out, True
+        _archive(kind, url, raw)
+        try:
+            batch = json.loads(raw)
+        except json.JSONDecodeError:
+            print(f"    page {page} bad JSON; treating as cap", flush=True)
+            return out, True
+        if isinstance(batch, dict):
+            batch = batch.get("data", [])
+        out.extend(batch)
+        if len(batch) < PAGE_LIMIT:
+            return out, False
+    return out, True
+
+
 def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000) -> tuple:
     """R11-1: official contract — next page via AFTER_CURSOR, urlencoded like any
     opaque query value. Page ledger records cursor/response SHAs and id ranges;
     no-progress (repeat page SHA OR non-advancing ids OR non-advancing cursor)
     fails closed. Returns (records, complete)."""
     out, after, seen_pages, prev_cursor_sha, prev_max_id = [], None, set(), None, None
+    seen_ids_global = set()
     ledger_path = DATA / "keyset_page_ledger.jsonl"
     for page in range(max_pages):
         params = dict(base_params, limit=PAGE_LIMIT)
@@ -37,19 +63,24 @@ def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000)
             params["after_cursor"] = after          # official param name, urlencoded by _get
         try:
             url, raw = _get(f"{path}/keyset", params)
+            sha = hashlib.sha256(raw).hexdigest()
+            doc = json.loads(raw)
+            # R12: response SCHEMA must contain the expected list key; an error
+            # body like {"error": ...} is INCOMPLETE, never a clean stop
+            if not isinstance(doc, dict) or not ({"markets", "events"} & set(doc)):
+                print(f"    keyset page {page}: unexpected schema {list(doc)[:3] if isinstance(doc, dict) else type(doc).__name__}; INCOMPLETE", flush=True)
+                return out, False
+            batch = doc.get("markets") or doc.get("events") or []
+            nxt = doc.get("next_cursor")
+            ids = [str(m.get("id")) for m in batch]
         except Exception as exc:
             print(f"    keyset page {page} error ({exc}); INCOMPLETE", flush=True)
             return out, False
-        sha = _h.sha256(raw).hexdigest()
-        doc = json.loads(raw)
-        batch = doc.get("markets") or doc.get("events") or []
-        nxt = doc.get("next_cursor")
-        ids = [str(m.get("id")) for m in batch]
         with open(ledger_path, "a") as lf:
             lf.write(json.dumps({
                 "page": page, "kind": kind,
-                "incoming_cursor_sha": _h.sha256((after or "").encode()).hexdigest()[:16],
-                "next_cursor_sha": _h.sha256((nxt or "").encode()).hexdigest()[:16],
+                "incoming_cursor_sha": hashlib.sha256((after or "").encode()).hexdigest()[:16],
+                "next_cursor_sha": hashlib.sha256((nxt or "").encode()).hexdigest()[:16],
                 "response_sha": sha, "n": len(ids),
                 "first_id": ids[0] if ids else None, "last_id": ids[-1] if ids else None,
             }) + "\n")
@@ -57,20 +88,19 @@ def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000)
             print(f"    keyset page {page}: repeat response, INCOMPLETE", flush=True)
             return out, False
         seen_pages.add(sha)
-        cur_cursor_sha = _h.sha256((nxt or "").encode()).hexdigest()
+        dup = seen_ids_global & set(ids)
+        if dup:      # R12: cross-page duplicate ids = no real progress
+            print(f"    keyset page {page}: {len(dup)} duplicate ids across pages, INCOMPLETE", flush=True)
+            return out, False
+        seen_ids_global.update(ids)
+        cur_cursor_sha = hashlib.sha256((nxt or "").encode()).hexdigest()
         if nxt and cur_cursor_sha == prev_cursor_sha:
             print(f"    keyset page {page}: cursor not advancing, INCOMPLETE", flush=True)
             return out, False
         prev_cursor_sha = cur_cursor_sha
-        try:
-            cur_max = max(int(i) for i in ids) if ids else None
-        except ValueError:
-            cur_max = None
-        if cur_max is not None and prev_max_id is not None and cur_max <= prev_max_id:
-            print(f"    keyset page {page}: ids not advancing, INCOMPLETE", flush=True)
-            return out, False
-        if cur_max is not None:
-            prev_max_id = cur_max
+        # numeric-id monotonicity is ADVISORY only (cursor is opaque; no order
+        # guarantee in the contract) — the binding guards are page-sha repeat,
+        # cursor non-advance and cross-page duplicate ids above
         _archive(kind, url, raw)
         out.extend(batch)
         if page % 100 == 0:
@@ -172,7 +202,8 @@ def main() -> dict:
             truncated.append("events-active-keyset-incomplete")
         print(f"events: {len(events)}", flush=True)
     except Exception as exc:
-        print(f"events channel failed ({exc}); market-embedded event ids still available", flush=True)
+        truncated.append(f"events-channel-exception:{type(exc).__name__}")
+        print(f"events channel failed ({exc}); recorded as INCOMPLETE", flush=True)
 
     out_dir = DATA / "views"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -200,7 +231,8 @@ def main() -> dict:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
     (out_dir / f"full_{stamp}_tags.json").write_text(json.dumps(tags, ensure_ascii=False))
 
-    # yield summary: settled EVENTS per ISO week (independent-unit raw material)
+    # closed-events per ISO week (trading-close clock; SETTLEMENT yield is computed
+    # downstream from resolved-only registry, never from this summary)
     week_events = defaultdict(set)
     ladder = Counter()
     mkts_per_event = Counter()
@@ -225,7 +257,7 @@ def main() -> dict:
         "n_active_markets": len(fresh_active),
         "n_unique_events_closed": len(mkts_per_event),
         "events_by_ladder_size": dict(ladder),
-        "settled_events_per_week": {k: len(v) for k, v in sorted(week_events.items())},
+        "closed_events_per_week_NOT_settled": {k: len(v) for k, v in sorted(week_events.items())},
         "n_events_indexed": len(ev_index),
         "possibly_truncated_windows": truncated,
         "top_tags": tag_hist.most_common(30),

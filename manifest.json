@@ -73,7 +73,7 @@
       "allocation": "equal_probability_across_5_arms",
       "blocking": "randomization_block_per_enrollment_wave",
       "noncompliance": "ITT: trajectories analyzed as randomized regardless of runtime failures; failure receipts ledgered",
-      "seed_schedule": "per_trajectory_seed = sha256(prereg_root_hash + trajectory_index); recorded in assignment ledger before first forecast",
+      "seed_schedule": "assignment_seed = sha256(prereg_root_hash + '|assign|' + wave); per_trajectory_seed = sha256(prereg_root_hash + '|traj|' + trajectory_index); domain-separated, recorded in assignment ledger before first forecast",
       "trajectories_per_arm_K": {
         "freeze_procedure": "gate G6 simulation output; frozen at preregistration",
         "status": "PENDING",
@@ -97,7 +97,7 @@
         }
       ],
       "coprimary_success_rule": "each contrast is independently reportable; paper headline requires at least one four-way branch other than inconclusive under Bonferroni-simultaneous intervals",
-      "estimator": "trajectory-level mean difference; crossed bootstrap resampling families and (arm-stratified) trajectories; Bonferroni simultaneous percentile CIs at 1-alpha/2 drive the four-way decisions; unadjusted p descriptive only",
+      "estimator": "within-wave contrast mean (blocked-design-compatible); crossed bootstrap resamples complete WAVES x FAMILIES; Bonferroni NOMINAL simultaneous percentile CIs at 1-alpha/2; actual coverage certified only by production G6 simulation",
       "multiplicity": "bonferroni_simultaneous_over_2_coprimary",
       "orientation": "tau = mean_brier(arm_a) - mean_brier(arm_b); negative tau favors arm_a",
       "sidedness": "two_sided",
@@ -279,7 +279,7 @@
       "predicate": "check_freeze_preconditions"
     }
   ],
-  "manifest_version": "5.5.0",
+  "manifest_version": "5.5.1",
   "memory_policy_common": {
     "admission_top_k": 8,
     "capacity_items": 64,

@@ -20,20 +20,17 @@ ELIGIBLE = {"macro_indicators", "monetary_policy", "geopolitics",
 
 
 def main() -> dict:
-    reg = {json.loads(l)["event_id"]: json.loads(l)
-           for l in open(sorted(VIEWS.glob("event_registry_*.jsonl"))[-1])}
+    import os as _os
+    reg_path = _os.environ.get("P1V5_REGISTRY")
+    top_path = _os.environ.get("P1V5_TOPICS")
+    if not reg_path or not top_path:
+        raise SystemExit("R12: set P1V5_REGISTRY and P1V5_TOPICS explicitly; implicit latest is forbidden")
+    reg = {json.loads(l)["event_id"]: json.loads(l) for l in open(reg_path)}
     # LLM labels: prefer finished topics file, else live checkpoint
     topics = {}
-    tfiles = sorted(VIEWS.glob("llm_topics_2*.jsonl"))
-    if tfiles:
-        for l in open(tfiles[-1]):
-            o = json.loads(l)
-            topics[o["event_id"]] = o["topic_llm"]
-    ckpt = VIEWS / "llm_topics_checkpoint.jsonl"
-    if ckpt.exists():
-        for l in open(ckpt):
-            o = json.loads(l)
-            topics.setdefault(o["event_id"], o["c"])
+    for l in open(top_path):
+        o = json.loads(l)
+        topics[o["event_id"]] = o.get("topic_llm") or o.get("c")
 
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
     eligible_events = []

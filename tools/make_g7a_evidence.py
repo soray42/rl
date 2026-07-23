@@ -10,6 +10,12 @@ from p1v5.config import manifest_sha256
 SRC = ROOT / "evidence_src/micro_pilot_live.json"
 PRC = ROOT / "evidence_src/pricing_v1.json"
 r = json.load(open(SRC))
+if not r.get("transcript_bundles"):
+    print("G7a source lacks transcript_bundles (receipts); run a fresh live micro-pilot "
+          "under the bundle-persisting pipeline before emitting G7a evidence. NOT emitting.")
+    raise SystemExit(2)
+import json as _j
+rb = hashlib.sha256(_j.dumps(sorted(r["transcript_bundles"].values())).encode()).hexdigest()
 est, act = r["est_total_cost_usd"], r["billed_cost_usd"]
 err_pct = abs(est - act) / act * 100
 evidence = {
@@ -22,7 +28,8 @@ evidence = {
     "metrics": {"cost_usd_estimate": est, "cost_error_pct": round(err_pct, 2),
                 "n_dry_run_events": r["n_questions"],
                 "source_report_sha256": hashlib.sha256(SRC.read_bytes()).hexdigest(),
-                "pricing_table_sha256": hashlib.sha256(PRC.read_bytes()).hexdigest()},
+                "pricing_table_sha256": hashlib.sha256(PRC.read_bytes()).hexdigest(),
+                "receipt_bundle_sha256": rb},
     "verdict": "PASS" if (err_pct <= 20 and r["n_questions"] >= 5) else "FAIL",
 }
 out = ROOT / "evidence/g7a_cost_micropilot.json"

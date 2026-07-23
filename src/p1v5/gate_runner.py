@@ -36,6 +36,9 @@ _POS_INT = {"type": "integer", "minimum": 1}
 _UNIT = {"type": "number", "minimum": 0, "maximum": 1}
 _POS_NUM = {"type": "number", "exclusiveMinimum": 0}
 
+G7A_SOURCE_PATH = ROOT / "evidence_src/micro_pilot_live.json"
+G7A_PRICING_PATH = ROOT / "evidence_src/pricing_v1.json"
+
 
 def _evidence_schema(metric_props: dict, required_metrics: list) -> dict:
     return {
@@ -68,9 +71,11 @@ EVIDENCE_SCHEMAS = {
     "G7a": _evidence_schema({"cost_usd_estimate": _POS_NUM, "cost_error_pct": {"type": "number", "minimum": 0, "maximum": 100},
                              "n_dry_run_events": _POS_INT,
                              "source_report_sha256": _HEX64,
-                             "pricing_table_sha256": _HEX64},
+                             "pricing_table_sha256": _HEX64,
+                             "receipt_bundle_sha256": _HEX64},
                             ["cost_usd_estimate", "cost_error_pct", "n_dry_run_events",
-                             "source_report_sha256", "pricing_table_sha256"]),
+                             "source_report_sha256", "pricing_table_sha256",
+                             "receipt_bundle_sha256"]),
     "G5a": _evidence_schema({"independent_family_transitions": _NONNEG_INT, "required_by_g6": _POS_INT},
                             ["independent_family_transitions", "required_by_g6"]),
     "G6": _evidence_schema({"type1_ucb": _UNIT, "power_lcb": _UNIT, "n_sims": _POS_INT,
@@ -192,9 +197,11 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
     if e["inputs"]["input_lock_sha256"] != current_lock_sha:
         return {"status": "FAIL", "reason": "evidence not bound to CURRENT input lock hash"}
     if gate["id"] == "G7a":
-        # R11-8: evidence must bind to a persisted source report; runner RECOMPUTES
-        src = ROOT / "evidence_src/micro_pilot_live.json"
-        prc = ROOT / "evidence_src/pricing_v1.json"
+        # R12 (P0-12-8): full recomputation chain — pricing PARSED and USED,
+        # cap checked against SOURCE numbers, evidence estimate must equal source,
+        # receipts (transcript bundle shas) bound into the evidence.
+        src = G7A_SOURCE_PATH
+        prc = G7A_PRICING_PATH
         for p_, key in ((src, "source_report_sha256"), (prc, "pricing_table_sha256")):
             if not p_.exists():
                 return {"status": "FAIL", "reason": f"G7a source artifact missing: {p_.name}"}
@@ -202,15 +209,36 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
             if e["metrics"][key] != got:
                 return {"status": "FAIL", "reason": f"G7a {key} != recomputed sha of {p_.name}"}
         rep = json.loads(src.read_text())
+        pricing = json.loads(prc.read_text())
+        model_p = pricing.get(rep.get("model"))
+        if not isinstance(model_p, dict) or "in_per_mtok" not in model_p:
+            return {"status": "FAIL", "reason": f"G7a pricing table has no entry for {rep.get('model')}"}
+        bp, bc = rep.get("billed_prompt_tokens"), rep.get("billed_completion_tokens")
         est_r, act_r = rep.get("est_total_cost_usd"), rep.get("billed_cost_usd")
-        if not act_r:
-            return {"status": "FAIL", "reason": "G7a source report lacks billed cost"}
+        if not all(isinstance(x, (int, float)) for x in (bp, bc, est_r, act_r)):
+            return {"status": "FAIL", "reason": "G7a source report lacks billed tokens/costs"}
+        act_recomputed = bp / 1e6 * model_p["in_per_mtok"] + bc / 1e6 * model_p["out_per_mtok"]
+        if abs(act_recomputed - act_r) > 0.01:
+            return {"status": "FAIL",
+                    "reason": f"G7a billed cost {act_r} != recomputed from tokens x pricing {act_recomputed:.4f}"}
+        llm_cap_ = manifest["budget"]["llm_usd"]["value"]
+        if est_r > llm_cap_ or act_r > llm_cap_:
+            return {"status": "FAIL",
+                    "reason": f"G7a SOURCE cost exceeds hard cap: est={est_r} billed={act_r} cap={llm_cap_}"}
+        if abs(e["metrics"]["cost_usd_estimate"] - est_r) > 1e-9:
+            return {"status": "FAIL", "reason": "G7a evidence estimate != source est_total_cost_usd"}
         recomputed_err = abs(est_r - act_r) / act_r * 100
         if abs(recomputed_err - e["metrics"]["cost_error_pct"]) > 0.05:
             return {"status": "FAIL",
                     "reason": f"G7a cost_error_pct {e['metrics']['cost_error_pct']} != recomputed {recomputed_err:.2f}"}
         if rep.get("n_questions") != e["metrics"]["n_dry_run_events"]:
             return {"status": "FAIL", "reason": "G7a n_dry_run_events != source report"}
+        bundles = rep.get("transcript_bundles")
+        if not bundles:
+            return {"status": "FAIL", "reason": "G7a source report lacks transcript_bundles (receipts)"}
+        rb = hashlib.sha256(json.dumps(sorted(bundles.values())).encode()).hexdigest()
+        if e["metrics"]["receipt_bundle_sha256"] != rb:
+            return {"status": "FAIL", "reason": "G7a receipt_bundle_sha256 != recomputed from source bundles"}
     binding = HASH_BINDINGS.get(gate["id"])
     if binding is not None:
         key, target_rel = binding

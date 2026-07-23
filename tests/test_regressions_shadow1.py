@@ -25,8 +25,9 @@ class TestBootstrapTrajectoryWeight(unittest.TestCase):
         # trajectory-dominant DGP: identical families, spread trajectory means.
         # v5.4 bug: dict-collapse discarded traj weights -> tau variance ~= 0.
         records = []
-        means = {"diff_agent_credit": [0.10, 0.18, 0.26, 0.34, 0.42, 0.50],
-                 "shared_surplus": [0.14, 0.22, 0.30, 0.38, 0.46, 0.54]}
+        # within-wave contrasts VARY across waves so wave-resampling has variance
+        means = {"diff_agent_credit": [0.10, 0.30, 0.12, 0.40, 0.15, 0.50],
+                 "shared_surplus":    [0.14, 0.16, 0.34, 0.20, 0.46, 0.22]}
         for arm, ms in means.items():
             for ti, m in enumerate(ms):
                 for f in range(8):
@@ -34,8 +35,10 @@ class TestBootstrapTrajectoryWeight(unittest.TestCase):
                         records.append({"trajectory_id": f"{arm}-t{ti}",
                                         "arm": arm, "family_id": f"fam-{f}",
                                         "market_id": f"fam-{f}-m{k}", "loss": m})
+        waves = {i: {"diff_agent_credit": f"diff_agent_credit-t{i}",
+                     "shared_surplus": f"shared_surplus-t{i}"} for i in range(6)}
         taus = crossed_bootstrap_taus(records, "diff_agent_credit", "shared_surplus",
-                                      n_boot=300, seed=5)
+                                      n_boot=300, seed=5, waves=waves)
         self.assertGreater(statistics.pstdev(taus), 0.01,
                            "trajectory resample weights must contribute variance")
 

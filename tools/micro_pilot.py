@@ -74,14 +74,9 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
         for k, q in enumerate(questions):
             t = team.run(q, slices, memory, seed=1000 + k)
             forecasts[q["question_id"]] = t.final_q
-            bundle = t.to_bundle(meta={"arm": arm, "k": k, "mode": mode,
-                                       "closed_time": q.get("closed_time"),
-                                       "epistemic_status": "DEV_NONCAUSAL"})
-            bpath = tdir / f"{arm}_{q['question_id']}.json"
-            bpath.write_text(json.dumps(bundle, ensure_ascii=False, sort_keys=True))
-            report["transcript_bundles"][f"{arm}/{q['question_id']}"] = t.sha()
             y = q["y"]
             batch = f"{arm}-b{k}"
+            sham_mapping = None
             if arm == "no_update":
                 credits = {}
             elif arm == "shared_surplus":
@@ -93,6 +88,24 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
             else:
                 credits = credit_c3_sham_t(team, q, slices, memory, t, y,
                                            seed=2000 + k, batch_id=batch)
+                import hashlib as _hh
+                from p1v5.policy import sattolo_derangement
+                keys = sorted(t.votes)
+                if len(keys) >= 2:
+                    dseed = int(_hh.sha256(batch.encode()).hexdigest()[:8], 16)
+                    sham_mapping = sattolo_derangement(keys, dseed)
+            # R12 (P0-12-6): persist AFTER counterfactual rollouts so the bundle
+            # holds ALL receipts; report sha = sha of the PERSISTED BYTES
+            bundle = t.to_bundle(meta={"arm": arm, "k": k, "mode": mode,
+                                       "closed_time": q.get("closed_time"),
+                                       "batch_id": batch,
+                                       "sham_mapping": sham_mapping,
+                                       "epistemic_status": "DEV_NONCAUSAL"})
+            bundle_bytes = json.dumps(bundle, ensure_ascii=False, sort_keys=True).encode()
+            bpath = tdir / f"{arm}_{q['question_id']}.json"
+            bpath.write_bytes(bundle_bytes)
+            import hashlib as _hh2
+            report["transcript_bundles"][f"{arm}/{q['question_id']}"] = _hh2.sha256(bundle_bytes).hexdigest()
             memory = update_memory_from_credits(
                 memory, credits, feedback_clock=float(k), batch_id=batch,
                 # shadow r1 P0-2: memory text encodes CREDIT signal only, never
