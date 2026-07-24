@@ -25,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+VIEWS = ROOT / "data/views"        # module-level so tests can redirect output
 
 from p1v5.deliberation import OpenRouterBackend  # noqa: E402
 
@@ -71,7 +72,7 @@ def parse_reply(text: str, expect: set) -> dict:
 
 
 def main() -> dict:
-    views = ROOT / "data/views"
+    views = VIEWS
     import os as _os
     reg_path = _os.environ.get("P1V5_REGISTRY")
     if not reg_path:
@@ -95,6 +96,7 @@ def main() -> dict:
     labels = {idx: done_ids[r["event_id"]] for idx, r in enumerate(rows)
               if r["event_id"] in done_ids}
     spent, receipts = 0.0, 0
+    receipt_rows = []      # shadow r4 P0: every label must trace to a receipted call
     ckpt_f = open(ckpt_path, "a")
 
     import threading
@@ -107,6 +109,11 @@ def main() -> dict:
         text, rec = backend.complete(prompt, seed=seed, purpose="topic_classify", max_tokens=600)
         with lock:
             receipts += 1
+            receipt_rows.append({"prompt_sha": rec.prompt_sha, "output_sha": rec.output_sha,
+                                 "prompt_tokens": rec.prompt_tokens,
+                                 "completion_tokens": rec.completion_tokens,
+                                 "model": rec.model, "provider": rec.provider,
+                                 "purpose": rec.purpose, "n_items": len(batch)})
             spent += (rec.prompt_tokens * PRICE_IN + rec.completion_tokens * PRICE_OUT) / 1e6
             if spent > COST_CAP_USD:
                 raise SystemExit(f"classification cost cap ${COST_CAP_USD} hit")
@@ -150,13 +157,24 @@ def main() -> dict:
         if cat not in ELIGIBLE and r["topic"] == "eligible":
             audit["eligible_downgraded"].append((r["event_id"], r["title"][:60], cat))
 
+    # shadow r4 P0: labels bind to RECEIPTED calls — the receipts file is written
+    # first so the topics lineage can pin its sha and call count
+    receipts_name = f"llm_topics_receipts_{stamp}.jsonl"
+    with open(views / receipts_name, "w") as f:
+        for rr in receipt_rows:
+            f.write(json.dumps(rr) + "\n")
+    receipts_sha = _hh.sha256((views / receipts_name).read_bytes()).hexdigest()
     with open(views / f"llm_topics_{stamp}.jsonl", "w") as f:
-        # r13 P0-13-3: the topics artifact NAMES its source registry (full sha),
-        # model and protocol — consumers verify the link, not the filename
+        # r13 P0-13-3 + shadow r4: the topics artifact NAMES its source registry
+        # (full sha), model, protocol AND its call receipts — consumers verify
+        # the whole link, not the filename
         f.write(json.dumps({"_lineage": {
             "registry_sha256": _hh.sha256(reg.read_bytes()).hexdigest(),
             "model": MODEL, "taxonomy": CATS,
-            "prompt_protocol": "compact_letter_v1"}}) + "\n")
+            "prompt_protocol": "compact_letter_v1",
+            "receipts_file": receipts_name, "receipts_sha256": receipts_sha,
+            "n_llm_calls": len(receipt_rows), "n_labeled": len(labels),
+            "batch_size": BATCH}}) + "\n")
         for o in out_rows:
             f.write(json.dumps(o, ensure_ascii=False) + "\n")
     summary = {

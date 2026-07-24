@@ -237,30 +237,46 @@ class TestG5aReferentChain(unittest.TestCase):
                                                 "source_markets": "m",
                                                 "source_events": "e"}}) + "\n")
         reg_sha = hashlib.sha256(reg.read_bytes()).hexdigest()
+        # shadow r4: topics + receipts join the referent chain
+        rcp = tmp / "topics_receipts.jsonl"
+        rcp.write_text(json.dumps({"prompt_sha": "p" * 64, "output_sha": "o" * 64,
+                                   "prompt_tokens": 10, "completion_tokens": 5,
+                                   "model": "m", "provider": "x",
+                                   "purpose": "topic_classify", "n_items": 2}) + "\n")
+        tpp = tmp / "topics.jsonl"
+        tpp.write_text(json.dumps({"_lineage": {
+            "registry_sha256": reg_sha, "model": "m", "taxonomy": ["geopolitics"],
+            "prompt_protocol": "compact_letter_v1",
+            "receipts_file": rcp.name,
+            "receipts_sha256": hashlib.sha256(rcp.read_bytes()).hexdigest(),
+            "n_llm_calls": 1, "n_labeled": 2, "batch_size": 40}}) + "\n"
+            + json.dumps({"event_id": "E1", "c": "geopolitics"}) + "\n")
+        top_sha = hashlib.sha256(tpp.read_bytes()).hexdigest()
         panel = {"summary": {"lineage": {"batch_manifest_sha256": bm_sha,
                                          "batch_allowed_use": allowed,
                                          "registry_sha256": reg_sha,
-                                         "topics_sha256": "0" * 64}},
+                                         "topics_sha256": top_sha}},
                  "panel": [{"series_key": f"s{i}", "n_instances": n} for i, n in enumerate(n_series)]}
         pnp = tmp / "panel.json"
         pnp.write_text(json.dumps(panel))
-        return bmp, reg, pnp, bm_sha, reg_sha
+        return bmp, reg, tpp, pnp, bm_sha, reg_sha, top_sha
 
     def _eval(self, metrics_patch=None, allowed="g5a_candidate", reasons=()):
         from p1v5.config import manifest_sha256
         from p1v5.checks import LOCK_PATH
         from p1v5.gate_runner import eval_evidence_gate
         tmp = Path(tempfile.mkdtemp())
-        bmp, reg, pnp, bm_sha, reg_sha = self._mk_referents(tmp, allowed, reasons)
+        bmp, reg, tpp, pnp, bm_sha, reg_sha, top_sha = self._mk_referents(tmp, allowed, reasons)
         transitions = sum(n - 1 for n in (4, 7))       # 9
         m_sha = manifest_sha256()
         l_sha = hashlib.sha256(LOCK_PATH.read_bytes()).hexdigest()
         metrics = {"independent_family_transitions": transitions, "required_by_g6": 8,
                    "batch_allowed_use": "g5a_candidate",
                    "batch_manifest_sha256": bm_sha, "registry_sha256": reg_sha,
+                   "topics_sha256": top_sha,
                    "panel_sha256": hashlib.sha256(pnp.read_bytes()).hexdigest(),
                    "batch_manifest_path": str(bmp), "registry_path": str(reg),
-                   "panel_path": str(pnp)}
+                   "topics_path": str(tpp), "panel_path": str(pnp)}
         metrics.update(metrics_patch or {})
         doc = {"produced_by": "r13-test", "produced_at_utc": "2026-07-23T00:00:00+00:00",
                "inputs": {"manifest_sha256": m_sha, "input_lock_sha256": l_sha},

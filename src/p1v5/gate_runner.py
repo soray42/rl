@@ -94,14 +94,16 @@ EVIDENCE_SCHEMAS = {
                              "batch_allowed_use": {"const": "g5a_candidate"},
                              "batch_manifest_sha256": _HEX64,
                              "registry_sha256": _HEX64,
+                             "topics_sha256": _HEX64,
                              "panel_sha256": _HEX64,
                              "batch_manifest_path": {"type": "string", "minLength": 1},
                              "registry_path": {"type": "string", "minLength": 1},
+                             "topics_path": {"type": "string", "minLength": 1},
                              "panel_path": {"type": "string", "minLength": 1}},
                             ["independent_family_transitions", "required_by_g6",
                              "batch_allowed_use", "batch_manifest_sha256", "registry_sha256",
-                             "panel_sha256", "batch_manifest_path", "registry_path",
-                             "panel_path"]),
+                             "topics_sha256", "panel_sha256", "batch_manifest_path",
+                             "registry_path", "topics_path", "panel_path"]),
     "G6": _evidence_schema({"type1_ucb": _UNIT, "power_lcb": _UNIT, "n_sims": _POS_INT,
                             "delta_frozen_sha256": _HEX64},
                            ["type1_ucb", "power_lcb", "n_sims", "delta_frozen_sha256"]),
@@ -309,8 +311,9 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
         m_ = e["metrics"]
         bmp, rgp, pnp = (ROOT / m_["batch_manifest_path"], ROOT / m_["registry_path"],
                          ROOT / m_["panel_path"])
+        tpp = ROOT / m_["topics_path"]
         for p_, key in ((bmp, "batch_manifest_sha256"), (rgp, "registry_sha256"),
-                        (pnp, "panel_sha256")):
+                        (tpp, "topics_sha256"), (pnp, "panel_sha256")):
             if not p_.exists():
                 return {"status": "FAIL", "reason": f"G5a referent missing: {p_}"}
             if hashlib.sha256(p_.read_bytes()).hexdigest() != m_[key]:
@@ -341,6 +344,39 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
                 or pn_lin.get("batch_manifest_sha256") != m_["batch_manifest_sha256"]:
             return {"status": "FAIL",
                     "reason": "G5a panel lineage does not link to THIS registry/batch"}
+        # shadow r4 P0: the TOPICS layer joins the chain — the gate opens the
+        # label file, requires its mandatory lineage header, links it to THIS
+        # registry AND to the panel's recorded topics sha, then opens the call
+        # RECEIPTS file: every label must trace to a receipted LLM call
+        if pn_lin.get("topics_sha256") != m_["topics_sha256"]:
+            return {"status": "FAIL",
+                    "reason": "G5a panel lineage topics_sha256 != evidence topics_sha256"}
+        try:
+            t_first = json.loads(tpp.read_text().splitlines()[0])
+            t_lin = t_first["_lineage"]
+        except Exception:
+            return {"status": "FAIL", "reason": "G5a topics file lacks a parseable _lineage header"}
+        if t_lin.get("registry_sha256") != m_["registry_sha256"]:
+            return {"status": "FAIL",
+                    "reason": "G5a topics lineage does not link to THIS registry"}
+        rc_name, rc_sha = t_lin.get("receipts_file"), t_lin.get("receipts_sha256")
+        n_calls, n_labeled = t_lin.get("n_llm_calls"), t_lin.get("n_labeled")
+        bsz = t_lin.get("batch_size")
+        if not all(isinstance(x, int) and x >= 0 for x in (n_calls, n_labeled)) \
+                or not isinstance(bsz, int) or bsz < 1 or not rc_name or not rc_sha:
+            return {"status": "FAIL",
+                    "reason": "G5a topics lineage lacks receipts binding "
+                              "(receipts_file/receipts_sha256/n_llm_calls/n_labeled/batch_size)"}
+        rcp = tpp.parent / rc_name
+        if not rcp.exists():
+            return {"status": "FAIL", "reason": f"G5a classification receipts missing: {rc_name}"}
+        if hashlib.sha256(rcp.read_bytes()).hexdigest() != rc_sha:
+            return {"status": "FAIL", "reason": "G5a receipts_sha256 != recomputed sha of receipts file"}
+        n_rows = sum(1 for ln in rcp.read_text().splitlines() if ln.strip())
+        if n_rows != n_calls or n_calls < 1 or n_labeled > n_calls * bsz:
+            return {"status": "FAIL",
+                    "reason": f"G5a receipts cardinality broken: rows={n_rows} declared_calls={n_calls} "
+                              f"labeled={n_labeled} batch_size={bsz}"}
         recomputed_tr = sum(max(0, int(s.get("n_instances", 0)) - 1)
                             for s in pn_.get("panel", []))
         if recomputed_tr != m_["independent_family_transitions"]:

@@ -139,10 +139,25 @@ class TestPanelLineage(unittest.TestCase):
         row = json.dumps({"event_id": "E1", "title": "t", "n_markets": 1,
                           "n_settled": 1, "n_settled_binary": 1,
                           "structure": "standalone", "topic": "eligible", "tags": [],
-                          "series_key": "k", "last_close": 1750000000, "volume": 1}) + "\n"
+                          "series_key": "k", "last_close": 1750000000,
+                          "last_uma_end_binary": 1750000100, "volume": 1}) + "\n"
         reg.write_text((header if with_header else "") + row)
+        # shadow r4: topics files carry a MANDATORY lineage header binding the
+        # registry sha and the classification receipts
+        rcp = tmp / "topics_receipts.jsonl"
+        rcp.write_text(json.dumps({"prompt_sha": "p" * 64, "output_sha": "o" * 64,
+                                   "prompt_tokens": 10, "completion_tokens": 5,
+                                   "model": "m", "provider": "x",
+                                   "purpose": "topic_classify", "n_items": 1}) + "\n")
         top = tmp / "topics.jsonl"
-        top.write_text(json.dumps({"event_id": "E1", "c": "geopolitics"}) + "\n")
+        top.write_text(json.dumps({"_lineage": {
+            "registry_sha256": hashlib.sha256(reg.read_bytes()).hexdigest(),
+            "model": "m", "taxonomy": ["geopolitics"],
+            "prompt_protocol": "compact_letter_v1",
+            "receipts_file": rcp.name,
+            "receipts_sha256": hashlib.sha256(rcp.read_bytes()).hexdigest(),
+            "n_llm_calls": 1, "n_labeled": 1, "batch_size": 40}}) + "\n"
+            + json.dumps({"event_id": "E1", "c": "geopolitics"}) + "\n")
         return reg, top
 
     def test_panel_refuses_lineage_less_registry(self):
@@ -183,9 +198,11 @@ class TestG5aSchemaRejectsDevBatch(unittest.TestCase):
                             "batch_allowed_use": allowed_use,
                             "batch_manifest_sha256": "a" * 64,
                             "registry_sha256": "b" * 64,
+                            "topics_sha256": "d" * 64,
                             "panel_sha256": "c" * 64,
                             "batch_manifest_path": "x/bm.json",
                             "registry_path": "x/reg.jsonl",
+                            "topics_path": "x/topics.jsonl",
                             "panel_path": "x/panel.json"},
                 "verdict": "PASS"}
 

@@ -19,7 +19,9 @@ PRC = ROOT / "evidence_src/pricing_v1.json"
 def main() -> int:
     from p1v5.checks import LOCK_PATH
     from p1v5.config import manifest_sha256
-    r = json.load(open(SRC))
+    # shadow r4 P2: generator mirrors the runner's strict RFC-8259 parse
+    r = json.loads(SRC.read_text(),
+                   parse_constant=lambda n: (_ for _ in ()).throw(ValueError(n)))
     if not r.get("transcript_bundles"):
         print("G7a source lacks transcript_bundles (receipts); run a fresh live micro-pilot "
               "under the bundle-persisting pipeline before emitting G7a evidence. NOT emitting.")

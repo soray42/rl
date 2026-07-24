@@ -83,9 +83,10 @@ def fetch_keyset(path: str, base_params: dict, kind: str, max_pages: int = 4000,
             batch = doc.get(expected_key) or []
             nxt = doc.get("next_cursor")
             raw_ids = [m.get("id") for m in batch]
-            if any(i is None for i in raw_ids):
-                print(f"    keyset page {page}: {sum(1 for i in raw_ids if i is None)} rows "
-                      f"missing id; INCOMPLETE", flush=True)
+            # shadow r4 P1: falsy/blank ids ("" / "  ") are as id-less as None
+            bad = sum(1 for i in raw_ids if i is None or str(i).strip() == "")
+            if bad:
+                print(f"    keyset page {page}: {bad} rows missing/blank id; INCOMPLETE", flush=True)
                 return out, False
             ids = [str(i) for i in raw_ids]
             if len(ids) != len(set(ids)):

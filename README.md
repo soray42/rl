@@ -28,10 +28,10 @@ P1V5_REFRESH_INTENT=yes python3 tools/refresh_lock.py   # 显式发布动作:刷
 | P1-2 G1 自证 | 独立解析 oracle((qr−qf)(qr+qf−2y))+ y∈{0,1}/ties/zero/clipping 五种世界 | `check_g1_estimators` |
 | P1-3 断言可被 -O 剥掉 | unittest 断言 + config 导入时拒绝 PYTHONOPTIMIZE + CI 环境守卫 + `unittest discover` 自动发现(未来测试不会被漏跑) | `TestOptimizeGuard` |
 
-## 当前机器状态(转述 build/gate_status.json)
+## 当前机器状态
 
-PASS=6(G9a/G0/G1/G2/G3/G10) FAIL=0 PENDING=10。PENDING 全部卡在外部证据工件(`evidence/*.json`,类型化 schema,由真实工具运行产出):G8 权利矩阵、G4 replay 路线、G7a 成本 micro-pilot → 下游顺次解锁。**release.sh 当前退出 2 是正确行为**——它拒绝在 PENDING 存在时放行。
+以 `python3 -B src/p1v5/gate_runner.py` 的实跑输出为准(README 不复述会过期的数字)。PENDING 门全部卡在外部证据工件(`evidence/*.json`,类型化 schema + referent 重算,由真实工具运行产出)。**release.sh 在任何 PENDING 存在时退出 2 是正确行为**——拒绝放行。
 
-## 诚实边界(七审裁决,保留)
+## 诚实边界(七审裁决起,r13 更新)
 
-五臂仍是 **toy_scaffold**(manifest 如实标注):真实 LLM/transcript 管线、随机分配执行器、方差/CI/Holm 分析代码(E3/E4)是下一个编码阶段;在纯加性玩具世界上 diff 与 c3 可能秩级重合(值级差异已断言)——策略级区分要等真管线。统计设计已冻结进 manifest(assignment/orientation/estimator/四路决策),数值 K/T/δ 按冻结程序 PENDING。
+E3/E4 已实现:真实 LLM/transcript 管线(`src/p1v5/deliberation.py`,receipted,provider 钉死)、随机分配执行器与四账本估计器(`src/p1v5/analysis.py`,波内对比 + wave×family 联合 bootstrap,Bonferroni **NOMINAL** 联立 CI——覆盖率待 production G6 仿真升格)。仍未做:完整 g5a_candidate 批次、带收据 live micro-pilot(G7a 证据再生)、pre_outcome_branches 归档(G4)、G5a/G6 闭环。manifest `arms` 段的 toy_scaffold 标注指五臂的**玩具合成世界演示**(G1/G10 用),真管线的策略级区分要等前瞻窗口——这不是统计代码缺席,是确证数据缺席。

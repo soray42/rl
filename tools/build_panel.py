@@ -39,19 +39,22 @@ def main() -> dict:
                "registry_sha256": _hh.sha256(open(reg_path, "rb").read()).hexdigest(),
                "topics_sha256": _hh.sha256(open(top_path, "rb").read()).hexdigest()}
     reg = {r["event_id"]: r for r in reg_lines[1:]}
-    # LLM labels: prefer finished topics file, else live checkpoint
-    # r13 P0-13-3: a topics _lineage header must LINK to this registry; a
-    # label file generated from a different registry is refused, not joined
+    # shadow r4 P0 (was r13 half-fix): the topics _lineage header is MANDATORY —
+    # an optional header let a forged header-less label file relabel excluded
+    # events into eligibility with zero refusal. Checkpoint files are resume
+    # caches, never panel inputs; only classify_events' receipted artifact is.
+    top_lines = [json.loads(l) for l in open(top_path)]
+    if not top_lines or "_lineage" not in top_lines[0]:
+        raise SystemExit("shadow-r4: topics file lacks the mandatory _lineage header "
+                         "(registry_sha256 + receipts binding); rebuild it with "
+                         "tools/classify_events.py — lineage-less label files are forbidden")
+    t_lin = top_lines[0]["_lineage"]
+    if t_lin.get("registry_sha256") != lineage["registry_sha256"]:
+        raise SystemExit(f"R13-3: topics lineage registry_sha256 "
+                         f"{t_lin.get('registry_sha256')!r} != the registry actually "
+                         f"being joined ({lineage['registry_sha256']}); refusing cross-batch join")
     topics = {}
-    for l in open(top_path):
-        o = json.loads(l)
-        if "_lineage" in o:
-            t_reg_sha = o["_lineage"].get("registry_sha256")
-            if t_reg_sha != lineage["registry_sha256"]:
-                raise SystemExit(f"R13-3: topics lineage registry_sha256 {t_reg_sha!r} != "
-                                 f"the registry actually being joined "
-                                 f"({lineage['registry_sha256']}); refusing cross-batch join")
-            continue
+    for o in top_lines[1:]:
         topics[o["event_id"]] = o.get("topic_llm") or o.get("c")
 
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
