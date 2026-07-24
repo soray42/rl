@@ -100,9 +100,13 @@ def mk_bundle(tmp, y_outcome="yes", root=FIXED_ROOT, fam_relabel=False,
             if mid.startswith("LATE"):
                 continue                     # censored markets have no rows
             q = 0.3 if e["arm"] == "diff_agent_credit" else 0.35
+            # r5-F1/F2: one transcript per trajectory (meta names it) and the
+            # q must be DERIVABLE: round-2 message -> parse -> median == final_q
             tb = {"schema_version": "transcript_bundle_v1", "question_id": mid,
-                  "meta": {"arm": e["arm"], "epistemic_status": "DEV_NONCAUSAL"},
-                  "messages": [], "votes": {}, "final_q": repr(q),
+                  "meta": {"arm": e["arm"], "trajectory_id": e["trajectory_id"],
+                           "epistemic_status": "DEV_NONCAUSAL"},
+                  "messages": [["agent-0", 2, f"reasoning stub\nFINAL: {q}"]],
+                  "votes": {"agent-0": repr(q)}, "final_q": repr(q),
                   "failure_class": None, "prompt_shas": ["a" * 64],
                   "receipts": [{"backend": "stub", "model": "m", "purpose": "round2",
                                 "prompt_sha": "a" * 64, "output_sha": "b" * 64,
@@ -347,9 +351,10 @@ class TestG6ReferentChain(unittest.TestCase):
                "k_per_arm": MIN_TRAJ_PER_ARM, "fam_sd": 0.02, "noise_sd": 0.01,
                "delta": 0.01, "alpha": manifest["estimand"]["contrasts"]["alpha"],
                "n_boot": manifest["estimand"]["contrasts"]["n_boot"]}
-        rows = [g6.run_replicate(dgp, s, 0) for s in ("null", "effect")]
-        # replicate 1 rows: cloned shape (gate only re-executes replicate 0)
-        rows += [dict(r, replicate=1) for r in rows]
+        # r5-F3: the gate now spot-checks sha-derived indices too, so every
+        # row in this tiny fixture must be genuinely computed
+        rows = [g6.run_replicate(dgp, s, i)
+                for s in ("null", "effect") for i in (0, 1)]
         n_sims = 2
         tmp = Path(tempfile.mkdtemp())
         rp = tmp / "raw.jsonl"

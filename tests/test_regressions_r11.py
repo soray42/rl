@@ -54,14 +54,18 @@ class TestG7aSourceBinding(unittest.TestCase):
         for arm in CANONICAL_ARMS:
             for k in range(n_q):
                 qid = f"q{k}"
+                # r5-F4: prompts embed the question, so receipts must differ
+                # across questions — honest fixtures model that
+                psha = hashlib.sha256(f"prompt|{arm}|{qid}".encode()).hexdigest()
+                osha = hashlib.sha256(f"output|{arm}|{qid}".encode()).hexdigest()
                 bdoc = {"schema_version": "transcript_bundle_v1", "question_id": qid,
                         "meta": {"arm": arm, "epistemic_status": "DEV_NONCAUSAL"},
                         "messages": [["agent-0", 1, "stub"]],
                         "votes": {"agent-0": "0.5"}, "final_q": "0.5",
-                        "failure_class": None, "prompt_shas": ["a" * 64],
+                        "failure_class": None, "prompt_shas": [psha],
                         "receipts": [{"backend": "stub", "model": "m",
-                                      "purpose": "round1", "prompt_sha": "a" * 64,
-                                      "output_sha": "b" * 64, "prompt_chars": 10,
+                                      "purpose": "round1", "prompt_sha": psha,
+                                      "output_sha": osha, "prompt_chars": 10,
                                       "output_chars": 5, "latency_ms": 0,
                                       "prompt_tokens": 4000, "completion_tokens": 2000,
                                       "provider": "x", "failure_class": ""}]}

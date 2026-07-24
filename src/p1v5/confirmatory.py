@@ -30,8 +30,11 @@ import hashlib
 import json
 from pathlib import Path
 
+import statistics
+
 from .analysis import _parse_utc_ts, analyze_coprimary
 from .config import load_manifest, manifest_sha256
+from .deliberation import parse_probability
 
 
 class ConfirmatoryError(Exception):
@@ -133,8 +136,13 @@ def analyze_confirmatory(bundle_dir) -> dict:
     registry_rows = _strict_rows(bundle_dir / "registry.jsonl")
 
     # ---- registry: enrolled markets' events must exist in the opened registry ----
-    if not registry_rows or "_lineage" not in registry_rows[0]:
-        raise ConfirmatoryError("bundle registry lacks its _lineage header")
+    # shadow r5 F5: the header must BE a lineage record, not just a present key
+    reg_lin = (registry_rows[0].get("_lineage") if registry_rows else None)
+    if not isinstance(reg_lin, dict) \
+            or not _is_hex64(reg_lin.get("batch_manifest_sha256")) \
+            or reg_lin.get("allowed_use") not in ("dev_lower_bound", "g5a_candidate"):
+        raise ConfirmatoryError("bundle registry lacks a WELL-FORMED _lineage header "
+                                "(batch_manifest_sha256 + allowed_use)")
     reg_events = {r["event_id"] for r in registry_rows[1:]}
 
     # ---- settlement DERIVED from market receipts (R14-2 #4) ----
@@ -181,12 +189,21 @@ def analyze_confirmatory(bundle_dir) -> dict:
                                     f"manifest cutoff {cutoff_utc!r}")
 
     # ---- q / failure_class DERIVED from opened transcript bundles (R14-2 #3) ----
-    records = []
+    # shadow r5 F1: one transcript backs exactly ONE forecast row, and its
+    # meta must name THAT trajectory — reuse collapses the bootstrap and
+    # manufactures decisions. shadow r5 F2: final_q is NOT a free field — it
+    # re-derives from the bundle's own round-2 messages through the production
+    # vote parser and median, the same discipline topic labels already get.
+    records, seen_tsha = [], set()
     tdir = bundle_dir / "transcripts"
     for row in fore_rows:
         tsha = row.get("transcript_bundle_sha256")
         if not _is_hex64(tsha):
             raise ConfirmatoryError(f"forecast row lacks transcript_bundle_sha256: {row!r}")
+        if tsha in seen_tsha:
+            raise ConfirmatoryError(f"transcript reuse: {tsha[:16]}… backs more than one "
+                                    f"forecast row (r5-F1)")
+        seen_tsha.add(tsha)
         tp = tdir / f"{tsha}.json"
         if not tp.exists():
             raise ConfirmatoryError(f"transcript bundle missing on disk: {tsha[:16]}…")
@@ -194,27 +211,51 @@ def analyze_confirmatory(bundle_dir) -> dict:
         if _sha(raw) != tsha:
             raise ConfirmatoryError(f"transcript bundle sha mismatch: {tsha[:16]}…")
         tb = json.loads(raw)
+        meta = tb.get("meta") or {}
         if tb.get("question_id") != row.get("market_id"):
             raise ConfirmatoryError(f"transcript question_id {tb.get('question_id')!r} != "
                                     f"forecast row market {row.get('market_id')!r}")
-        if (tb.get("meta") or {}).get("arm") != row.get("arm"):
+        if meta.get("arm") != row.get("arm"):
             raise ConfirmatoryError(f"transcript meta.arm != forecast row arm for "
                                     f"{row.get('market_id')}")
+        if meta.get("trajectory_id") != row.get("trajectory_id"):
+            raise ConfirmatoryError(f"transcript meta.trajectory_id "
+                                    f"{meta.get('trajectory_id')!r} != forecast row "
+                                    f"trajectory {row.get('trajectory_id')!r} (r5-F1)")
         base = {"trajectory_id": row["trajectory_id"], "arm": row["arm"],
                 "market_id": row["market_id"], "family_id": row["family_id"]}
         fc = tb.get("failure_class")
-        final_q = tb.get("final_q")
         if fc:
             records.append(dict(base, failure_class=fc))
-        else:
-            # bundle serializes final_q via repr(); "None" without failure_class
-            # is a malformed transcript, not a forecast
-            try:
-                q = float(final_q)
-            except (TypeError, ValueError):
-                raise ConfirmatoryError(f"transcript final_q underivable for "
-                                        f"{row.get('market_id')}: {final_q!r}")
-            records.append(dict(base, q=q))
+            continue
+        # r5-F2: recompute every vote from the round-2 message text with the
+        # production parser, then the median — stored votes/final_q may only
+        # CONFIRM the derivation, never replace it
+        r2_msgs = [m for m in tb.get("messages", [])
+                   if isinstance(m, (list, tuple)) and len(m) == 3 and m[1] == 2]
+        if not r2_msgs:
+            raise ConfirmatoryError(f"transcript for {row['market_id']} has no round-2 "
+                                    f"messages; q underivable (r5-F2)")
+        derived_votes = {m[0]: parse_probability(m[2]) for m in r2_msgs}
+        stored_votes = tb.get("votes") or {}
+        if set(stored_votes) != set(derived_votes) or any(
+                stored_votes[a] != repr(v) for a, v in derived_votes.items()):
+            raise ConfirmatoryError(f"transcript votes for {row['market_id']} do not "
+                                    f"re-derive from its round-2 messages (r5-F2)")
+        valid = [v for v in derived_votes.values() if v is not None]
+        if not valid:
+            raise ConfirmatoryError(f"transcript for {row['market_id']} derives no valid "
+                                    f"vote yet claims a forecast (r5-F2)")
+        q = statistics.median(valid)
+        try:
+            stated = float(tb.get("final_q"))
+        except (TypeError, ValueError):
+            raise ConfirmatoryError(f"transcript final_q unreadable for "
+                                    f"{row.get('market_id')}: {tb.get('final_q')!r}")
+        if abs(stated - q) > 1e-12:
+            raise ConfirmatoryError(f"transcript final_q {stated} != median of derived "
+                                    f"votes {q} for {row['market_id']} (r5-F2)")
+        records.append(dict(base, q=q))
 
     # ---- frozen bootstrap seed (R14-4 #3) ----
     inputs_digest = _sha("".join(sorted(files.values())).encode())
@@ -241,7 +282,9 @@ def analyze_confirmatory(bundle_dir) -> dict:
         "bootstrap_seed": boot_seed,
         "bootstrap_seed_schedule": con["bootstrap_seed_schedule"],
         "inputs_digest_sha256": inputs_digest,
-        "n_transcripts_opened": len(fore_rows),
+        # r5-F1: unique files, honestly counted (reuse is a hard error above)
+        "n_forecast_rows": len(fore_rows),
+        "n_unique_transcripts_opened": len(seen_tsha),
         "family_rule": "frozen_family_id: min(event_ids) else market_id",
     })
     return out

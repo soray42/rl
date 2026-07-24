@@ -338,6 +338,7 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
                     "reason": "G7a source lacks transcript_dir (bundle files unlocatable)"}
         td = ROOT / td_rel
         qids_per_arm, sum_pt, sum_ct = {}, 0, 0
+        _seen_receipt_arrays = {}
         for key in sorted(bundles):
             arm, _, qid = key.partition("/")
             bpath = td / f"{arm}_{qid}.json"
@@ -362,6 +363,17 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
                                   f"(question_id={bdoc['question_id']!r}, "
                                   f"meta.arm={bdoc['meta'].get('arm')!r})"}
             qids_per_arm.setdefault(arm, set()).add(qid)
+            # r5-F4: two QUESTIONS of one arm can never honestly share an
+            # identical receipts array (prompts embed the question text) —
+            # identity-relabeled content clones die here
+            ser_ = json.dumps(bdoc["receipts"], sort_keys=True)
+            dup_key = (arm, ser_)
+            if dup_key in _seen_receipt_arrays:
+                return {"status": "FAIL",
+                        "reason": f"G7a arm {arm}: identical receipts array across two "
+                                  f"questions ({_seen_receipt_arrays[dup_key]} vs {qid}) — "
+                                  f"content clone (r5-F4)"}
+            _seen_receipt_arrays[dup_key] = qid
             for rcp in bdoc["receipts"]:
                 sum_pt += rcp["prompt_tokens"]
                 sum_ct += rcp["completion_tokens"]
@@ -546,18 +558,27 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
                 or dgp_["n_boot"] != manifest["estimand"]["contrasts"]["n_boot"]:
             return {"status": "FAIL",
                     "reason": "G6 dgp alpha/n_boot != manifest-frozen production values"}
-        # genesis spot-check: replicate 0 of each scenario must re-execute to
-        # the recorded row through the ACTUAL production path
+        # genesis spot-check (r5-F3 hardened): re-execute replicate 0 PLUS a
+        # set of replicates whose indices derive from the raw file's OWN sha —
+        # a fabricator cannot know which rows will be re-run without changing
+        # the file and re-rolling the indices. Honest boundary, stated plainly:
+        # this bounds fabrication effort statistically; the full-re-execution
+        # proof happens once at FREEZE, outside the per-run gate budget.
+        n_spot = min(n_, max(4, n_ // 100))
+        by_key = {(r_.get("scenario"), r_.get("replicate")): r_ for r_ in rows_}
         for scen in ("null", "effect"):
-            recorded = next((r_ for r_ in rows_
-                             if r_.get("scenario") == scen and r_.get("replicate") == 0), None)
-            if recorded is None:
-                return {"status": "FAIL", "reason": f"G6 raw rows lack {scen} replicate 0"}
-            rerun = _g6.run_replicate(dgp_, scen, 0)
-            if rerun != recorded:
-                return {"status": "FAIL",
-                        "reason": f"G6 {scen} replicate 0 does not re-execute to the "
-                                  f"recorded row (genesis check failed)"}
+            idxs = {0} | {int(hashlib.sha256(
+                f"{m_['raw_results_sha256']}|spot|{scen}|{j}".encode()).hexdigest()[:8], 16) % n_
+                for j in range(n_spot)}
+            for i_ in sorted(idxs):
+                recorded = by_key.get((scen, i_))
+                if recorded is None:
+                    return {"status": "FAIL", "reason": f"G6 raw rows lack {scen} replicate {i_}"}
+                rerun = _g6.run_replicate(dgp_, scen, i_)
+                if rerun != recorded:
+                    return {"status": "FAIL",
+                            "reason": f"G6 {scen} replicate {i_} does not re-execute to the "
+                                      f"recorded row (genesis check failed)"}
     binding = HASH_BINDINGS.get(gate["id"])
     if binding is not None:
         key, target_rel = binding
