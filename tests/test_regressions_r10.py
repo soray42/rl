@@ -63,14 +63,16 @@ class TestEvidenceSemanticsR10(unittest.TestCase):
         self.assertEqual(res["status"], "FAIL")
 
     def test_g6_unbound_delta_hash_fails(self):
-        # a hash with no valid referent must FAIL: either the target file is
-        # absent ("recomputable target") or present with a different content
-        # ("does not match recomputed")
+        # a hash with no valid referent must FAIL. r14 strengthened this gate:
+        # summary-only evidence now dies at the SCHEMA (simulator / analysis
+        # code / raw results are required referents) — earlier and stricter
+        # than the original "recomputable target" path, same property
         res = _eval("G6", {"type1_ucb": 0.01, "power_lcb": 0.90, "n_sims": 2000,
                            "delta_frozen_sha256": "d" * 64})
         self.assertEqual(res["status"], "FAIL")
         self.assertTrue("recomputable target" in res["reason"]
-                        or "recomputed" in res["reason"], res["reason"])
+                        or "recomputed" in res["reason"]
+                        or "required property" in res["reason"], res["reason"])
 
     def test_g9b_wrong_search_log_hash_fails(self):
         log = ROOT / "evidence/g9b_search_log.jsonl"

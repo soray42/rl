@@ -288,7 +288,9 @@
             "orientation",
             "estimator",
             "smallest_worthwhile_effect",
-            "coprimary"
+            "coprimary",
+            "n_boot",
+            "bootstrap_seed_schedule"
           ],
           "properties": {
             "alpha": {
@@ -342,6 +344,13 @@
             "coprimary_success_rule": {
               "type": "string",
               "minLength": 1
+            },
+            "n_boot": {
+              "const": 2000
+            },
+            "bootstrap_seed_schedule": {
+              "type": "string",
+              "minLength": 60
             }
           }
         },
@@ -547,6 +556,9 @@
         "fixture_suite": {
           "type": "string",
           "minLength": 1
+        },
+        "follow_up_cutoff_utc": {
+          "$ref": "#/definitions/pending_or_frozen"
         }
       }
     },

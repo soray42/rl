@@ -85,7 +85,9 @@ class TestForgedTopicsRefused(unittest.TestCase):
         ep.write_text(json.dumps(doc))
         r = eval_evidence_gate({"id": "G5a", "evidence_path": str(ep)}, m_sha, l_sha)
         self.assertEqual(r["status"], "FAIL")
-        self.assertIn("receipts", r["reason"])
+        # R14-1 tightened the failure surface: a lineage without the parser /
+        # raw-calls binding dies on whichever link is checked first
+        self.assertTrue(any(w in r["reason"] for w in ("parser", "calls")), r["reason"])
 
 
 class TestClassifierReceiptsPipeline(unittest.TestCase):
@@ -130,15 +132,22 @@ class TestClassifierReceiptsPipeline(unittest.TestCase):
         lin = lines[0]["_lineage"]
         self.assertEqual(lin["registry_sha256"],
                          hashlib.sha256(reg.read_bytes()).hexdigest())
-        rcp = tmp / lin["receipts_file"]
+        # R14-1: lineage binds the frozen parser and the raw calls file
+        self.assertEqual(lin["parser_sha256"], hashlib.sha256(
+            (ROOT / "src/p1v5/topic_parser.py").read_bytes()).hexdigest())
+        rcp = tmp / lin["calls_file"]
         self.assertTrue(rcp.exists())
-        self.assertEqual(lin["receipts_sha256"],
+        self.assertEqual(lin["calls_sha256"],
                          hashlib.sha256(rcp.read_bytes()).hexdigest())
         self.assertGreaterEqual(lin["n_llm_calls"], 1)
         self.assertEqual(lin["n_labeled"], 2)
-        rows = {o["event_id"]: o["topic_llm"] for o in lines[1:]}
-        self.assertEqual(rows["E1"], "geopolitics")
-        self.assertEqual(rows["E2"], "sports_esports")
+        rows = {o["event_id"]: o for o in lines[1:]}
+        self.assertEqual(rows["E1"]["topic_llm"], "geopolitics")
+        self.assertEqual(rows["E2"]["topic_llm"], "sports_esports")
+        # every derived label names its call / item / output binding
+        for eid in ("E1", "E2"):
+            self.assertIn("call_id", rows[eid])
+            self.assertIn("output_sha", rows[eid])
 
 
 class TestKeysetBlankId(unittest.TestCase):

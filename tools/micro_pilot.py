@@ -127,13 +127,13 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
             chars += sum(r.prompt_chars + r.output_chars for r in t.receipts)
             chars_in += sum(r.prompt_chars for r in t.receipts)
             chars_out += sum(r.output_chars for r in t.receipts)
-            report["billed_prompt_tokens"] = report.get("billed_prompt_tokens", 0) + sum(
+            report["receipt_reported_prompt_tokens"] = report.get("receipt_reported_prompt_tokens", 0) + sum(
                 r.prompt_tokens for r in t.receipts)
-            report["billed_completion_tokens"] = report.get("billed_completion_tokens", 0) + sum(
+            report["receipt_reported_completion_tokens"] = report.get("receipt_reported_completion_tokens", 0) + sum(
                 r.completion_tokens for r in t.receipts)
             if mode == "live":       # shadow r1 F7: cap checked per QUESTION, not per arm
-                spent = (report.get("billed_prompt_tokens", 0) / 1e6 * PRICE_IN_PER_MTOK[model]
-                         + report.get("billed_completion_tokens", 0) / 1e6 * PRICE_OUT_PER_MTOK[model])
+                spent = (report.get("receipt_reported_prompt_tokens", 0) / 1e6 * PRICE_IN_PER_MTOK[model]
+                         + report.get("receipt_reported_completion_tokens", 0) / 1e6 * PRICE_OUT_PER_MTOK[model])
                 if spent > HARD_CAP_USD:
                     raise SystemExit(f"hard cap ${HARD_CAP_USD} hit mid-run (${spent:.2f}); aborting")
         outcomes = {q["question_id"]: q["y"] for q in questions}
@@ -152,9 +152,11 @@ def run_pilot(mode: str = "dry", n_questions: int = 6, n_agents: int = 3) -> dic
         if mode == "live" and sum(a["est_cost_usd"] for a in report["arms"].values()) > HARD_CAP_USD:
             raise SystemExit("hard cap reached; aborting live pilot")
     report["est_total_cost_usd"] = round(sum(a["est_cost_usd"] for a in report["arms"].values()), 4)
-    report["billed_cost_usd"] = round(
-        report.get("billed_prompt_tokens", 0) / 1e6 * PRICE_IN_PER_MTOK[model]
-        + report.get("billed_completion_tokens", 0) / 1e6 * PRICE_OUT_PER_MTOK[model], 4)
+    # R14-6: "receipt_reported", never "billed" — these totals come from provider
+    # usage fields in call receipts, not from an independent billing export
+    report["receipt_reported_cost_usd"] = round(
+        report.get("receipt_reported_prompt_tokens", 0) / 1e6 * PRICE_IN_PER_MTOK[model]
+        + report.get("receipt_reported_completion_tokens", 0) / 1e6 * PRICE_OUT_PER_MTOK[model], 4)
     report["produced_at_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     out = BUILD_DIR / f"micro_pilot_{mode}.json"
     out.parent.mkdir(parents=True, exist_ok=True)

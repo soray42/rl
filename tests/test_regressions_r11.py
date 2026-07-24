@@ -42,9 +42,9 @@ class TestG7aSourceBinding(unittest.TestCase):
     tampering anywhere in the chain must FAIL."""
 
     def _mk_source(self):
-        # r13 P0-13-8: the source must name a transcript_dir holding REAL bundle
-        # files (5 arms x n_questions), whose receipts re-sum to the billed
-        # tokens — self-reported shas with no referent can no longer PASS
+        # R14-6: bundles are SCHEMA-VALID, DISTINCT transcripts whose internal
+        # arm/question_id match their map key (the old fixture was 25
+        # byte-identical token-only files — the audit's exact counterexample)
         import tempfile
         import uuid
         from p1v5.checks import CANONICAL_ARMS
@@ -53,15 +53,26 @@ class TestG7aSourceBinding(unittest.TestCase):
         bundles = {}
         for arm in CANONICAL_ARMS:
             for k in range(n_q):
-                bdoc = {"receipts": [{"purpose": "round1", "prompt_tokens": 4000,
-                                      "completion_tokens": 2000}]}
-                bb = json.dumps(bdoc).encode()
-                (td / f"{arm}_q{k}.json").write_bytes(bb)
-                bundles[f"{arm}/q{k}"] = hashlib.sha256(bb).hexdigest()
+                qid = f"q{k}"
+                bdoc = {"schema_version": "transcript_bundle_v1", "question_id": qid,
+                        "meta": {"arm": arm, "epistemic_status": "DEV_NONCAUSAL"},
+                        "messages": [["agent-0", 1, "stub"]],
+                        "votes": {"agent-0": "0.5"}, "final_q": "0.5",
+                        "failure_class": None, "prompt_shas": ["a" * 64],
+                        "receipts": [{"backend": "stub", "model": "m",
+                                      "purpose": "round1", "prompt_sha": "a" * 64,
+                                      "output_sha": "b" * 64, "prompt_chars": 10,
+                                      "output_chars": 5, "latency_ms": 0,
+                                      "prompt_tokens": 4000, "completion_tokens": 2000,
+                                      "provider": "x", "failure_class": ""}]}
+                bb = json.dumps(bdoc, sort_keys=True).encode()
+                (td / f"{arm}_{qid}.json").write_bytes(bb)
+                bundles[f"{arm}/{qid}"] = hashlib.sha256(bb).hexdigest()
         rep = {"model": "deepseek/deepseek-v4-flash", "n_questions": n_q,
-               "billed_prompt_tokens": 100000, "billed_completion_tokens": 50000,
+               "receipt_reported_prompt_tokens": 100000,
+               "receipt_reported_completion_tokens": 50000,
                "est_total_cost_usd": 0.0177,
-               "billed_cost_usd": round(100000/1e6*0.09 + 50000/1e6*0.18, 4),
+               "receipt_reported_cost_usd": round(100000/1e6*0.09 + 50000/1e6*0.18, 4),
                "transcript_dir": str(td),
                "transcript_bundles": bundles}
         p = ROOT / "build" / f"tmp_src_{uuid.uuid4().hex}.json"
@@ -77,7 +88,7 @@ class TestG7aSourceBinding(unittest.TestCase):
             rep.update(source_patch)
             src.write_text(json.dumps(rep))
         prc = ROOT / "evidence_src/pricing_v1.json"
-        est, act = rep["est_total_cost_usd"], rep["billed_cost_usd"]
+        est, act = rep["est_total_cost_usd"], rep["receipt_reported_cost_usd"]
         rb = hashlib.sha256(json.dumps(sorted(rep["transcript_bundles"].values())).encode()).hexdigest()
         metrics = {"cost_usd_estimate": est,
                    "cost_error_pct": round(abs(est - act) / act * 100, 2),

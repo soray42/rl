@@ -57,6 +57,13 @@ clocks:
     events dead-lettered without consuming idempotency keys
   negrisk_invariant: at most one terminal yes per group; violation quarantines the
     whole group
+  follow_up_cutoff_utc:
+    status: PENDING
+    value: null
+    freeze_procedure: canonical UTC instant frozen at preregistration (LOCK); every
+      settlement row must satisfy resolved_at_utc <= cutoff — any later-settling market
+      enters the frozen censoring rule instead; confirmatory analysis REFUSES to run
+      while PENDING (R14-3)
 estimand:
   assignment:
     allocation: equal_probability_across_5_arms
@@ -100,6 +107,11 @@ estimand:
         estimates
       status: PENDING
       value: null
+    n_boot: 2000
+    bootstrap_seed_schedule: boot_seed = int(sha256(prereg_root_hash + '|boot|' +
+      contrast_id + '|' + inputs_digest).hexdigest()[:16], 16) where inputs_digest
+      = sha256 over the sorted content shas of all five ledgers; UTF-8, base-10, 64-bit
+      truncation; NO caller override at the confirmatory entry point (R14-4)
   decision_rule:
     branches:
     - meaningful_benefit
@@ -223,7 +235,7 @@ gates:
   - LOCK
   id: FREEZE
   predicate: check_freeze_preconditions
-manifest_version: 5.5.2
+manifest_version: 5.5.3
 memory_policy_common:
   admission_top_k: 8
   capacity_items: 64

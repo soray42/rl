@@ -66,7 +66,12 @@
     "fixture_suite": "tests/fixtures/clock_fixtures.json",
     "forecast_admissible": "enrolled AND trading open AND input_at < forecast_at < prediction_cutoff AND no known outcome_public_time <= forecast_at AND question not quarantined",
     "ledger_model": "immutable scoped event log; state = pure fold in canonical (t, source, msg_id) order; illegal transitions quarantine the question fail-closed; invalid events dead-lettered without consuming idempotency keys",
-    "negrisk_invariant": "at most one terminal yes per group; violation quarantines the whole group"
+    "negrisk_invariant": "at most one terminal yes per group; violation quarantines the whole group",
+    "follow_up_cutoff_utc": {
+      "status": "PENDING",
+      "value": null,
+      "freeze_procedure": "canonical UTC instant frozen at preregistration (LOCK); every settlement row must satisfy resolved_at_utc <= cutoff — any later-settling market enters the frozen censoring rule instead; confirmatory analysis REFUSES to run while PENDING (R14-3)"
+    }
   },
   "estimand": {
     "assignment": {
@@ -105,7 +110,9 @@
         "freeze_procedure": "decision-meaning document written and hashed BEFORE gate G6 runs; defined on per-market mean Brier scale; independent of pilot effect estimates",
         "status": "PENDING",
         "value": null
-      }
+      },
+      "n_boot": 2000,
+      "bootstrap_seed_schedule": "boot_seed = int(sha256(prereg_root_hash + '|boot|' + contrast_id + '|' + inputs_digest).hexdigest()[:16], 16) where inputs_digest = sha256 over the sorted content shas of all five ledgers; UTF-8, base-10, 64-bit truncation; NO caller override at the confirmatory entry point (R14-4)"
     },
     "decision_rule": {
       "branches": [
@@ -279,7 +286,7 @@
       "predicate": "check_freeze_preconditions"
     }
   ],
-  "manifest_version": "5.5.2",
+  "manifest_version": "5.5.3",
   "memory_policy_common": {
     "admission_top_k": 8,
     "capacity_items": 64,

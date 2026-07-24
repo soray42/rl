@@ -429,7 +429,14 @@ def analyze_coprimary(records: list, delta: float, alpha: float = 0.05,
             "ci_level_nominal": level, "multiplicity": "bonferroni_nominal_pending_g6",
             "ci": ci, "decision": four_way(ci[0], ci[1], delta),
         }
-    results["_provenance"] = {"prereg_root_hash": prereg_root_hash,
+    # R14-4: this function is the DEV/SIMULATION ENGINE — its parameters are
+    # free so G6 can sweep planted worlds through the exact production code
+    # path, and its output is TIERED so it can never ground a claim. The only
+    # confirmatory entry is confirmatory.analyze_confirmatory, which reads
+    # every statistical parameter from the frozen manifest and derives every
+    # input from opened, re-hashed referents.
+    results["_provenance"] = {"epistemic_status": "dev_engine_not_confirmatory",
+                              "prereg_root_hash": prereg_root_hash,
                               "enrollment_registry_sha256": rs,
                               "n_settled": led["n_settled"],
                               "n_eligible_markets": len(led["eligible"])}

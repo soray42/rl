@@ -235,22 +235,32 @@ class TestG5aReferentChain(unittest.TestCase):
                                                 "batch_manifest_sha256": bm_sha,
                                                 "allowed_use": allowed,
                                                 "source_markets": "m",
-                                                "source_events": "e"}}) + "\n")
+                                                "source_events": "e"}}) + "\n"
+                       + json.dumps({"event_id": "E1", "title": "War in X?"}) + "\n")
         reg_sha = hashlib.sha256(reg.read_bytes()).hexdigest()
-        # shadow r4: topics + receipts join the referent chain
-        rcp = tmp / "topics_receipts.jsonl"
-        rcp.write_text(json.dumps({"prompt_sha": "p" * 64, "output_sha": "o" * 64,
-                                   "prompt_tokens": 10, "completion_tokens": 5,
-                                   "model": "m", "provider": "x",
-                                   "purpose": "topic_classify", "n_items": 2}) + "\n")
+        # shadow r4 + R14-1: topics labels must RE-DERIVE from persisted raw
+        # outputs through the frozen parser — the fixture is a real derivation
+        raw_text = "0:c"                      # frozen parser: c = geopolitics
+        out_sha = hashlib.sha256(raw_text.encode()).hexdigest()
+        rcp = tmp / "topics_calls.jsonl"
+        rcp.write_text(json.dumps({"call_id": "call0001", "seed": 1, "model": "m",
+                                   "provider": "x", "prompt_sha": "p" * 64,
+                                   "output_sha": out_sha, "prompt_tokens": 10,
+                                   "completion_tokens": 5, "raw_text": raw_text,
+                                   "items": [[0, "E1"]]}) + "\n")
+        parser_sha = hashlib.sha256(
+            (ROOT / "src/p1v5/topic_parser.py").read_bytes()).hexdigest()
         tpp = tmp / "topics.jsonl"
         tpp.write_text(json.dumps({"_lineage": {
-            "registry_sha256": reg_sha, "model": "m", "taxonomy": ["geopolitics"],
-            "prompt_protocol": "compact_letter_v1",
-            "receipts_file": rcp.name,
-            "receipts_sha256": hashlib.sha256(rcp.read_bytes()).hexdigest(),
-            "n_llm_calls": 1, "n_labeled": 2, "batch_size": 40}}) + "\n"
-            + json.dumps({"event_id": "E1", "c": "geopolitics"}) + "\n")
+            "registry_sha256": reg_sha, "model": "m",
+            "taxonomy": ["geopolitics"], "prompt_protocol": "compact_letter_v1",
+            "parser_sha256": parser_sha,
+            "calls_file": rcp.name,
+            "calls_sha256": hashlib.sha256(rcp.read_bytes()).hexdigest(),
+            "n_llm_calls": 1, "n_labeled": 1, "batch_size": 40}}) + "\n"
+            + json.dumps({"event_id": "E1", "topic_llm": "geopolitics",
+                          "call_id": "call0001", "item_index": 0,
+                          "output_sha": out_sha}) + "\n")
         top_sha = hashlib.sha256(tpp.read_bytes()).hexdigest()
         panel = {"summary": {"lineage": {"batch_manifest_sha256": bm_sha,
                                          "batch_allowed_use": allowed,
@@ -323,7 +333,7 @@ class TestG7aStrictAndReceipted(unittest.TestCase):
         import uuid
         prc = ROOT / "evidence_src/pricing_v1.json"
         est = rep["est_total_cost_usd"]
-        act = rep["billed_cost_usd"]
+        act = rep["receipt_reported_cost_usd"]
         try:
             err = abs(est - act) / act * 100
         except TypeError:
@@ -368,9 +378,9 @@ class TestG7aStrictAndReceipted(unittest.TestCase):
 
     def test_token_sum_mismatch_fails(self):
         def inflate(rep):
-            rep["billed_prompt_tokens"] = 999999
-            rep["billed_cost_usd"] = round(999999/1e6*0.09 + 50000/1e6*0.18, 4)
-            rep["est_total_cost_usd"] = rep["billed_cost_usd"]
+            rep["receipt_reported_prompt_tokens"] = 999999
+            rep["receipt_reported_cost_usd"] = round(999999/1e6*0.09 + 50000/1e6*0.18, 4)
+            rep["est_total_cost_usd"] = rep["receipt_reported_cost_usd"]
             return rep
         r = self._eval_with(inflate)
         self.assertEqual(r["status"], "FAIL")

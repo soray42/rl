@@ -49,6 +49,46 @@ _POS_NUM = {"type": "number", "exclusiveMinimum": 0}
 G7A_SOURCE_PATH = ROOT / "evidence_src/micro_pilot_live.json"
 G7A_PRICING_PATH = ROOT / "evidence_src/pricing_v1.json"
 
+# R14-6: a transcript bundle is a TYPED artifact, not "any JSON with receipts".
+# The G7a gate validates every persisted bundle against this schema and then
+# cross-checks internal identity (arm / question_id) against the map key.
+TRANSCRIPT_BUNDLE_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["schema_version", "question_id", "meta", "messages", "votes",
+                 "final_q", "failure_class", "prompt_shas", "receipts"],
+    "properties": {
+        "schema_version": {"const": "transcript_bundle_v1"},
+        "question_id": {"type": "string", "minLength": 1},
+        "meta": {"type": "object", "required": ["arm", "epistemic_status"]},
+        "messages": {"type": "array"},
+        "votes": {"type": "object"},
+        "final_q": {"type": ["string", "null"]},
+        "failure_class": {"type": ["string", "null"]},
+        "prompt_shas": {"type": "array", "minItems": 1,
+                        "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+        "receipts": {"type": "array", "minItems": 1, "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["backend", "model", "purpose", "prompt_sha", "output_sha",
+                         "prompt_chars", "output_chars", "latency_ms",
+                         "prompt_tokens", "completion_tokens", "provider",
+                         "failure_class"],
+            "properties": {
+                "backend": {"type": "string", "minLength": 1},
+                "model": {"type": "string", "minLength": 1},
+                "purpose": {"enum": ["round1", "round2", "c3_rollout"]},
+                "prompt_sha": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "output_sha": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "prompt_chars": {"type": "integer", "minimum": 0},
+                "output_chars": {"type": "integer", "minimum": 0},
+                "latency_ms": {"type": "integer", "minimum": 0},
+                "prompt_tokens": {"type": "integer", "minimum": 0},
+                "completion_tokens": {"type": "integer", "minimum": 0},
+                "provider": {"type": "string"},
+                "failure_class": {"type": "string"},
+            }}},
+    },
+}
+
 
 def _evidence_schema(metric_props: dict, required_metrics: list) -> dict:
     return {
@@ -104,9 +144,22 @@ EVIDENCE_SCHEMAS = {
                              "batch_allowed_use", "batch_manifest_sha256", "registry_sha256",
                              "topics_sha256", "panel_sha256", "batch_manifest_path",
                              "registry_path", "topics_path", "panel_path"]),
+    # R14-5: G6 evidence must NAME its simulator, the production analysis code,
+    # its DGP, its seed schedule and its raw per-replicate results — the runner
+    # recomputes the code shas, opens the rows, re-derives the summary stats
+    # with the pinned formula and re-executes replicate 0 as a genesis check
     "G6": _evidence_schema({"type1_ucb": _UNIT, "power_lcb": _UNIT, "n_sims": _POS_INT,
-                            "delta_frozen_sha256": _HEX64},
-                           ["type1_ucb", "power_lcb", "n_sims", "delta_frozen_sha256"]),
+                            "delta_frozen_sha256": _HEX64,
+                            "simulator_sha256": _HEX64,
+                            "analysis_code_sha256": _HEX64,
+                            "raw_results_path": {"type": "string", "minLength": 1},
+                            "raw_results_sha256": _HEX64,
+                            "dgp": {"type": "object"},
+                            "seed_schedule": {"type": "string", "minLength": 30}},
+                           ["type1_ucb", "power_lcb", "n_sims", "delta_frozen_sha256",
+                            "simulator_sha256", "analysis_code_sha256",
+                            "raw_results_path", "raw_results_sha256", "dgp",
+                            "seed_schedule"]),
     "G5b": _evidence_schema({"weeks_required": _POS_NUM, "calendar_ok": {"type": "boolean"}},
                             ["weeks_required", "calendar_ok"]),
     "G7b": _evidence_schema({"total_cost_usd": {"type": "number", "minimum": 0},
@@ -247,10 +300,13 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
         model_p = pricing.get(rep.get("model"))
         if not isinstance(model_p, dict) or "in_per_mtok" not in model_p:
             return {"status": "FAIL", "reason": f"G7a pricing table has no entry for {rep.get('model')}"}
-        bp, bc = rep.get("billed_prompt_tokens"), rep.get("billed_completion_tokens")
-        est_r, act_r = rep.get("est_total_cost_usd"), rep.get("billed_cost_usd")
+        bp = rep.get("receipt_reported_prompt_tokens")
+        bc = rep.get("receipt_reported_completion_tokens")
+        est_r, act_r = rep.get("est_total_cost_usd"), rep.get("receipt_reported_cost_usd")
         if not all(isinstance(x, (int, float)) for x in (bp, bc, est_r, act_r)):
-            return {"status": "FAIL", "reason": "G7a source report lacks billed tokens/costs"}
+            return {"status": "FAIL",
+                    "reason": "G7a source report lacks receipt_reported tokens/costs "
+                              "(R14-6: 'billed' naming retired — these are receipt-derived)"}
         act_recomputed = bp / 1e6 * model_p["in_per_mtok"] + bc / 1e6 * model_p["out_per_mtok"]
         if abs(act_recomputed - act_r) > 0.01:
             return {"status": "FAIL",
@@ -281,7 +337,7 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
             return {"status": "FAIL",
                     "reason": "G7a source lacks transcript_dir (bundle files unlocatable)"}
         td = ROOT / td_rel
-        arm_counts, sum_pt, sum_ct = {}, 0, 0
+        qids_per_arm, sum_pt, sum_ct = {}, 0, 0
         for key in sorted(bundles):
             arm, _, qid = key.partition("/")
             bpath = td / f"{arm}_{qid}.json"
@@ -289,18 +345,34 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
                 return {"status": "FAIL", "reason": f"G7a bundle file missing on disk: {bpath.name}"}
             if hashlib.sha256(bpath.read_bytes()).hexdigest() != bundles[key]:
                 return {"status": "FAIL", "reason": f"G7a bundle sha mismatch for {key}"}
-            arm_counts[arm] = arm_counts.get(arm, 0) + 1
             try:
                 bdoc = _strict_json(bpath)
             except Exception as exc:
                 return {"status": "FAIL", "reason": f"G7a bundle {key} not strict JSON: {exc}"}
-            for rcp in bdoc.get("receipts", []):
-                sum_pt += rcp.get("prompt_tokens", 0)
-                sum_ct += rcp.get("completion_tokens", 0)
-        if (set(arm_counts) != set(CANONICAL_ARMS)
-                or set(arm_counts.values()) != {rep.get("n_questions")}):
+            # R14-6: the bundle must BE a transcript (typed schema), and its
+            # internal identity must match the map key it is filed under
+            errs_ = list(jsonschema.Draft7Validator(TRANSCRIPT_BUNDLE_SCHEMA).iter_errors(bdoc))
+            if errs_:
+                return {"status": "FAIL",
+                        "reason": f"G7a bundle {key} violates transcript schema: "
+                                  f"{errs_[0].message[:120]}"}
+            if bdoc["question_id"] != qid or bdoc["meta"].get("arm") != arm:
+                return {"status": "FAIL",
+                        "reason": f"G7a bundle {key} internal identity mismatch "
+                                  f"(question_id={bdoc['question_id']!r}, "
+                                  f"meta.arm={bdoc['meta'].get('arm')!r})"}
+            qids_per_arm.setdefault(arm, set()).add(qid)
+            for rcp in bdoc["receipts"]:
+                sum_pt += rcp["prompt_tokens"]
+                sum_ct += rcp["completion_tokens"]
+        if set(qids_per_arm) != set(CANONICAL_ARMS):
             return {"status": "FAIL",
-                    "reason": f"G7a bundle cardinality != arms x questions: {arm_counts}"}
+                    "reason": f"G7a arms {sorted(qids_per_arm)} != canonical five"}
+        qsets = list(qids_per_arm.values())
+        if any(qs != qsets[0] for qs in qsets) or len(qsets[0]) != rep.get("n_questions"):
+            return {"status": "FAIL",
+                    "reason": "G7a arms do not share ONE identical question-id set of "
+                              "size n_questions (R14-6: per-arm counts are not enough)"}
         if sum_pt != bp or sum_ct != bc:
             return {"status": "FAIL",
                     "reason": f"G7a billed tokens {bp}/{bc} != receipts sum {sum_pt}/{sum_ct}"}
@@ -359,30 +431,133 @@ def eval_evidence_gate(gate, current_manifest_sha, current_lock_sha, manifest=No
         if t_lin.get("registry_sha256") != m_["registry_sha256"]:
             return {"status": "FAIL",
                     "reason": "G5a topics lineage does not link to THIS registry"}
-        rc_name, rc_sha = t_lin.get("receipts_file"), t_lin.get("receipts_sha256")
-        n_calls, n_labeled = t_lin.get("n_llm_calls"), t_lin.get("n_labeled")
-        bsz = t_lin.get("batch_size")
-        if not all(isinstance(x, int) and x >= 0 for x in (n_calls, n_labeled)) \
-                or not isinstance(bsz, int) or bsz < 1 or not rc_name or not rc_sha:
+        # R14-1: labels are DERIVED, never audited by aggregate counts — the
+        # gate recomputes the frozen parser's sha, opens the persisted raw
+        # call outputs, RE-RUNS the parser, and requires every topics row to
+        # equal its derivation (unparsed rows must be underivable), with the
+        # row set a exact partition of the opened registry's events.
+        parser_ref = ROOT / "src/p1v5/topic_parser.py"
+        if t_lin.get("parser_sha256") != hashlib.sha256(parser_ref.read_bytes()).hexdigest():
             return {"status": "FAIL",
-                    "reason": "G5a topics lineage lacks receipts binding "
-                              "(receipts_file/receipts_sha256/n_llm_calls/n_labeled/batch_size)"}
+                    "reason": "G5a topics parser_sha256 != recomputed sha of frozen topic_parser.py"}
+        rc_name, rc_sha = t_lin.get("calls_file"), t_lin.get("calls_sha256")
+        n_calls, n_labeled = t_lin.get("n_llm_calls"), t_lin.get("n_labeled")
+        if not rc_name or not rc_sha or not isinstance(n_calls, int) \
+                or not isinstance(n_labeled, int):
+            return {"status": "FAIL",
+                    "reason": "G5a topics lineage lacks raw-calls binding "
+                              "(calls_file/calls_sha256/n_llm_calls/n_labeled)"}
         rcp = tpp.parent / rc_name
         if not rcp.exists():
-            return {"status": "FAIL", "reason": f"G5a classification receipts missing: {rc_name}"}
+            return {"status": "FAIL", "reason": f"G5a raw calls file missing: {rc_name}"}
         if hashlib.sha256(rcp.read_bytes()).hexdigest() != rc_sha:
-            return {"status": "FAIL", "reason": "G5a receipts_sha256 != recomputed sha of receipts file"}
-        n_rows = sum(1 for ln in rcp.read_text().splitlines() if ln.strip())
-        if n_rows != n_calls or n_calls < 1 or n_labeled > n_calls * bsz:
+            return {"status": "FAIL", "reason": "G5a calls_sha256 != recomputed sha of calls file"}
+        from p1v5.topic_parser import parse_reply as _frozen_parse
+        call_rows_ = [json.loads(ln) for ln in rcp.read_text().splitlines() if ln.strip()]
+        if len(call_rows_) != n_calls or n_calls < 1:
             return {"status": "FAIL",
-                    "reason": f"G5a receipts cardinality broken: rows={n_rows} declared_calls={n_calls} "
-                              f"labeled={n_labeled} batch_size={bsz}"}
+                    "reason": f"G5a calls file rows {len(call_rows_)} != declared {n_calls}"}
+        derived_ = {}
+        for cr in call_rows_:
+            raw_ = cr.get("raw_text")
+            if not isinstance(raw_, str) or hashlib.sha256(raw_.encode()).hexdigest() != cr.get("output_sha"):
+                return {"status": "FAIL",
+                        "reason": f"G5a call {cr.get('call_id')} raw_text does not hash to output_sha"}
+            idxs_ = {i for i, _e in cr.get("items", [])}
+            parsed_ = _frozen_parse(raw_, idxs_)
+            for i_, eid_ in cr.get("items", []):
+                if i_ in parsed_:
+                    derived_[eid_] = (parsed_[i_], cr.get("call_id"), cr.get("output_sha"))
+        t_rows = [json.loads(ln) for ln in tpp.read_text().splitlines()[1:] if ln.strip()]
+        reg_all = [json.loads(ln) for ln in rgp.read_text().splitlines() if ln.strip()]
+        reg_events_ = {r_["event_id"] for r_ in reg_all[1:]}
+        seen_ev, n_lab_rows = set(), 0
+        for tr in t_rows:
+            eid_ = tr.get("event_id")
+            if eid_ in seen_ev:
+                return {"status": "FAIL", "reason": f"G5a duplicate topics row for event {eid_}"}
+            seen_ev.add(eid_)
+            if tr.get("topic_llm") == "unparsed":
+                if eid_ in derived_:
+                    return {"status": "FAIL",
+                            "reason": f"G5a event {eid_} marked unparsed but the frozen parser "
+                                      f"derives {derived_[eid_][0]!r}"}
+                continue
+            n_lab_rows += 1
+            if eid_ not in derived_:
+                return {"status": "FAIL",
+                        "reason": f"G5a label for {eid_} has no derivable source in raw outputs"}
+            cat_, cid_, osha_ = derived_[eid_]
+            if (tr.get("topic_llm") != cat_ or tr.get("call_id") != cid_
+                    or tr.get("output_sha") != osha_):
+                return {"status": "FAIL",
+                        "reason": f"G5a label for {eid_} does not re-derive from its bound "
+                                  f"raw output (row says {tr.get('topic_llm')!r}, parser "
+                                  f"derives {cat_!r})"}
+        if seen_ev != reg_events_:
+            return {"status": "FAIL",
+                    "reason": f"G5a topics rows are not an exact partition of the registry "
+                              f"({len(seen_ev)} rows vs {len(reg_events_)} events)"}
+        if n_lab_rows != n_labeled:
+            return {"status": "FAIL",
+                    "reason": f"G5a n_labeled {n_labeled} != labeled rows {n_lab_rows}"}
         recomputed_tr = sum(max(0, int(s.get("n_instances", 0)) - 1)
                             for s in pn_.get("panel", []))
         if recomputed_tr != m_["independent_family_transitions"]:
             return {"status": "FAIL",
                     "reason": f"G5a independent_family_transitions {m_['independent_family_transitions']} "
                               f"!= recomputed from panel ({recomputed_tr})"}
+    if gate["id"] == "G6":
+        # R14-5: no simulator referent, no PASS — fabricated summary numbers
+        # were previously accepted on schema shape alone
+        m_ = e["metrics"]
+        for ref_path, key in ((ROOT / "tools/g6_simulation.py", "simulator_sha256"),
+                              (ROOT / "src/p1v5/analysis.py", "analysis_code_sha256")):
+            if hashlib.sha256(ref_path.read_bytes()).hexdigest() != m_[key]:
+                return {"status": "FAIL",
+                        "reason": f"G6 {key} != recomputed sha of {ref_path.name}"}
+        rp = ROOT / m_["raw_results_path"]
+        if not rp.exists():
+            return {"status": "FAIL", "reason": f"G6 raw results missing: {m_['raw_results_path']}"}
+        if hashlib.sha256(rp.read_bytes()).hexdigest() != m_["raw_results_sha256"]:
+            return {"status": "FAIL", "reason": "G6 raw_results_sha256 != recomputed sha"}
+        rows_ = [json.loads(ln) for ln in rp.read_text().splitlines() if ln.strip()]
+        n_ = m_["n_sims"]
+        null_n = sum(1 for r_ in rows_ if r_.get("scenario") == "null")
+        eff_n = sum(1 for r_ in rows_ if r_.get("scenario") == "effect")
+        if null_n != n_ or eff_n != n_:
+            return {"status": "FAIL",
+                    "reason": f"G6 raw rows {null_n}/{eff_n} per scenario != n_sims {n_}"}
+        sys.path.insert(0, str(ROOT / "tools"))
+        import g6_simulation as _g6
+        s_ = _g6.summarize(rows_, n_)
+        if abs(s_["type1_ucb"] - m_["type1_ucb"]) > 1e-6 \
+                or abs(s_["power_lcb"] - m_["power_lcb"]) > 1e-6:
+            return {"status": "FAIL",
+                    "reason": f"G6 summary stats do not recompute from raw rows "
+                              f"(type1_ucb {m_['type1_ucb']} vs {s_['type1_ucb']}, "
+                              f"power_lcb {m_['power_lcb']} vs {s_['power_lcb']})"}
+        dgp_ = m_["dgp"]
+        need = {"root_prefix", "n_fam", "k_per_arm", "fam_sd", "noise_sd",
+                "delta", "alpha", "n_boot"}
+        if not need.issubset(dgp_):
+            return {"status": "FAIL", "reason": f"G6 dgp lacks frozen keys {sorted(need - set(dgp_))}"}
+        if dgp_["alpha"] != manifest["estimand"]["contrasts"]["alpha"] \
+                or dgp_["n_boot"] != manifest["estimand"]["contrasts"]["n_boot"]:
+            return {"status": "FAIL",
+                    "reason": "G6 dgp alpha/n_boot != manifest-frozen production values"}
+        # genesis spot-check: replicate 0 of each scenario must re-execute to
+        # the recorded row through the ACTUAL production path
+        for scen in ("null", "effect"):
+            recorded = next((r_ for r_ in rows_
+                             if r_.get("scenario") == scen and r_.get("replicate") == 0), None)
+            if recorded is None:
+                return {"status": "FAIL", "reason": f"G6 raw rows lack {scen} replicate 0"}
+            rerun = _g6.run_replicate(dgp_, scen, 0)
+            if rerun != recorded:
+                return {"status": "FAIL",
+                        "reason": f"G6 {scen} replicate 0 does not re-execute to the "
+                                  f"recorded row (genesis check failed)"}
     binding = HASH_BINDINGS.get(gate["id"])
     if binding is not None:
         key, target_rel = binding
